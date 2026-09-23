@@ -15,6 +15,21 @@ cd ~/workspace/MAPD-repro && bash mapd.sh setup
 `~/workspace/verl/.venv`. Only set `VERL_VENV` when the environment is stored
 elsewhere.
 
+## Local model smoke test
+
+After downloading Qwen3-1.7B to `~/models/Qwen3-1.7B`, load it with vLLM and
+run one real GPU generation using a short command:
+
+```bash
+bash mapd.sh model-smoke
+```
+
+For a different location, pass the directory explicitly:
+
+```bash
+bash mapd.sh model-smoke /path/to/Qwen3-1.7B
+```
+
 ## Headless job control
 
 No desktop session, notebook, W&B, or web dashboard is required. Start a job

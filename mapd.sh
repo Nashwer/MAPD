@@ -11,6 +11,7 @@ Usage: bash mapd.sh COMMAND
 Commands:
   setup    Install into the sibling veRL environment and run full verification
   verify   Run tests and the offline end-to-end smoke flow
+  model-smoke  Load the local Qwen model and run one GPU inference
   start    Run verification in the background
   status   Show background job and GPU status
   logs     Show the last 200 log lines
@@ -28,6 +29,10 @@ case ${1:-} in
     ;;
   verify)
     bash "$PROJECT_ROOT/scripts/run_smoke.sh"
+    ;;
+  model-smoke)
+    cd "$PROJECT_ROOT"
+    "$VERL_VENV/bin/python" "$PROJECT_ROOT/scripts/model_smoke.py" "${2:-}"
     ;;
   start)
     bash "$PROJECT_ROOT/scripts/jobctl.sh" start verify bash "$PROJECT_ROOT/scripts/run_smoke.sh"
@@ -61,4 +66,3 @@ case ${1:-} in
     exit 2
     ;;
 esac
-
