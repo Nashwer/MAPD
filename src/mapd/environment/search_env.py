@@ -35,16 +35,24 @@ class ScriptedPolicy:
 
 
 class AgenticSearchEnvironment:
-    def __init__(self, retriever: Retriever, *, top_k: int = 3, max_turns: int = 4):
+    def __init__(
+        self,
+        retriever: Retriever,
+        *,
+        top_k: int = 3,
+        max_turns: int = 4,
+        system_prompt: str = AGENT_SYSTEM_PROMPT,
+    ):
         self.retriever = retriever
         self.top_k = top_k
         self.max_turns = max_turns
+        self.system_prompt = system_prompt
 
     def rollout(
         self, sample: QASample, policy: StudentPolicy, *, max_new_tokens: int = 512
     ) -> AgentTrajectory:
         messages = [
-            {"role": "system", "content": AGENT_SYSTEM_PROMPT},
+            {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": sample.question},
         ]
         turns: list[AgentTurn] = []
@@ -108,4 +116,3 @@ def format_observation(passages: list[RetrievedPassage]) -> str:
 
 def generated_trajectory_text(trajectory: AgentTrajectory) -> str:
     return "\n".join(turn.model_output for turn in trajectory.turns)
-

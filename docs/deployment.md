@@ -15,6 +15,11 @@ cd ~/workspace/MAPD-repro && bash mapd.sh setup
 `~/workspace/verl/.venv`. Only set `VERL_VENV` when the environment is stored
 elsewhere.
 
+The GPU smoke commands require the following Ubuntu packages in addition to
+the veRL environment: `python3.12-dev`, `ninja-build`,
+`cuda-compiler-13-0`, and `libcurand-dev-13-0`. The launcher automatically
+uses `/usr/local/cuda-13.0` when it is installed there.
+
 ## Local model smoke test
 
 After downloading Qwen3-1.7B to `~/models/Qwen3-1.7B`, load it with vLLM and
@@ -29,6 +34,17 @@ For a different location, pass the directory explicitly:
 ```bash
 bash mapd.sh model-smoke /path/to/Qwen3-1.7B
 ```
+
+Run a real multi-turn agent check with the local fixture retriever:
+
+```bash
+bash mapd.sh agent-smoke
+```
+
+This command requires the model to emit a search action, executes BM25, feeds
+the retrieved observation back to the same model, checks the terminal answer,
+and writes the complete trajectory to
+`artifacts/agent_smoke/trajectory.jsonl`.
 
 ## Headless job control
 
