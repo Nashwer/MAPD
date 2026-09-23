@@ -82,6 +82,12 @@ Linux GPU 服务器的可重复部署步骤见
 cd ~/workspace/MAPD-repro && bash mapd.sh bootstrap
 ```
 
+该命令不假定 `/home` 会被保留。脚本会明确报告虚拟环境是 `MISSING`、
+`INCOMPLETE`、`BROKEN` 还是 `HEALTHY`；前三种情况自动按仓库中的固定版本
+清单重建或修复，已有缓存仅用于加速。版本入口为
+`scripts/bootstrap_versions.env`，附加 Python 依赖位于
+`requirements/server-bootstrap.txt`。
+
 
 ## 后续训练路线
 

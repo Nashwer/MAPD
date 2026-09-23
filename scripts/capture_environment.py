@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -45,6 +46,13 @@ def main() -> int:
 
     manifest = {
         "captured_at": datetime.now(timezone.utc).isoformat(),
+        "bootstrap": {
+            "schema": os.environ.get("MAPD_BOOTSTRAP_SCHEMA"),
+            "verl_ref": os.environ.get("MAPD_VERL_REF"),
+            "model_id": os.environ.get("MAPD_MODEL_ID"),
+            "numpy": os.environ.get("MAPD_NUMPY_VERSION"),
+            "cuda_series": os.environ.get("MAPD_CUDA_SERIES"),
+        },
         "platform": platform.platform(),
         "python": platform.python_version(),
         "packages": {

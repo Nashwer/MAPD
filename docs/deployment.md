@@ -9,18 +9,26 @@ environment with one command:
 cd ~/workspace/MAPD-repro && bash mapd.sh bootstrap
 ```
 
-The bootstrap is idempotent. It installs only missing system packages, reuses
-an importable `~/workspace/verl/.venv`, reuses the model under
-`~/models/Qwen3-1.7B`, installs MAPD, runs offline tests and a real agent
-trajectory, and writes an exact environment record to
+No persistent `/home` directory is assumed. The minimum base-image contract is
+Ubuntu 24.04 x86_64, a working NVIDIA driver/GPU, Bash, `apt`, root access (or
+`sudo`), and a checked-out copy of this repository. The bootstrap verifies that contract and
+then obtains every other system package, Python package, source checkout, and
+model required by the current repository revision.
+
+The bootstrap is idempotent. It classifies the virtual environment as
+`MISSING`, `INCOMPLETE`, `BROKEN`, or `HEALTHY`. A missing or damaged
+`~/workspace/verl/.venv` is created/repaired from veRL's frozen lock file; a
+healthy one is reused. The model under `~/models/Qwen3-1.7B` is handled the
+same way. It then installs MAPD, runs offline tests and a real agent trajectory,
+and writes an exact environment record to
 `artifacts/environment/manifest.json`. Its full terminal log is retained under
 `logs/bootstrap-*.log`.
 
-On a completely blank home directory, clone MAPD first and then run the same
-bootstrap command. The script clones the tagged veRL `v0.9.1` checkout when
-the sibling `~/workspace/verl` checkout is absent. If `/home` is persistent
-between daily GPU instances, the large Python environment and model download
-are reused while the reset system packages are repaired.
+On a completely blank home directory, obtain MAPD first and then run the same
+bootstrap command. The script clones the repository-pinned veRL checkout when
+the sibling `~/workspace/verl` checkout is absent. If `/home` happens to be
+persistent, its environment, package caches, and model are optional speedups;
+correctness never depends on them.
 
 For a dependency-only rebuild without downloading/loading the model:
 
@@ -30,8 +38,11 @@ bash mapd.sh bootstrap --skip-model --skip-verify
 
 The maintained bootstrap contract currently includes Python 3.12 headers,
 Ninja, the CUDA 13.0 compiler, cuRAND headers, veRL FSDP + vLLM, NumPy 2.3.5,
-PyArrow, pytest, MAPD, and Qwen3-1.7B. New module dependencies must be added to
-`scripts/bootstrap_server.sh` as part of the same code change.
+PyArrow, pytest, MAPD, and Qwen3-1.7B. Pinned stack inputs live in
+`scripts/bootstrap_versions.env`; MAPD-side Python additions live in
+`requirements/server-bootstrap.txt`. Future modules must update these files
+and the bootstrap script in the same code change, so the one-command rebuild
+remains complete.
 
 ## Reuse an existing veRL environment
 

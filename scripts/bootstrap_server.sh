@@ -3,10 +3,18 @@ set -Eeuo pipefail
 
 PROJECT_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 WORKSPACE_ROOT=$(dirname "$PROJECT_ROOT")
+VERSIONS_FILE="$PROJECT_ROOT/scripts/bootstrap_versions.env"
+if [[ ! -f "$VERSIONS_FILE" ]]; then
+  echo "ERROR: missing repository version file: $VERSIONS_FILE" >&2
+  exit 3
+fi
+# shellcheck source=bootstrap_versions.env
+source "$VERSIONS_FILE"
+
 VERL_ROOT=${VERL_ROOT:-"$WORKSPACE_ROOT/verl"}
 VERL_VENV=${VERL_VENV:-"$VERL_ROOT/.venv"}
-MODEL_ROOT=${MAPD_MODEL_PATH:-"$HOME/models/Qwen3-1.7B"}
-VERL_REF=${VERL_REF:-v0.9.1}
+MODEL_ROOT=${MAPD_MODEL_PATH:-"$HOME/models/${MAPD_MODEL_ID##*/}"}
+VERL_REF=${VERL_REF:-$MAPD_VERL_REF}
 UV_CACHE_DIR=${UV_CACHE_DIR:-"$HOME/cache/uv"}
 HF_HOME=${HF_HOME:-"$HOME/cache/huggingface"}
 HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
@@ -16,6 +24,10 @@ UV_CONCURRENT_DOWNLOADS=${UV_CONCURRENT_DOWNLOADS:-8}
 PIP_INDEX_URL=${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
 SKIP_MODEL=0
 SKIP_VERIFY=0
+SUDO=()
+if (( EUID != 0 )); then
+  SUDO=(sudo)
+fi
 
 for argument in "$@"; do
   case "$argument" in
@@ -35,14 +47,50 @@ exec > >(tee -a "$BOOTSTRAP_LOG") 2>&1
 
 trap 'echo "BOOTSTRAP FAILED at line $LINENO. Log: $BOOTSTRAP_LOG" >&2' ERR
 
-export VERL_ROOT VERL_VENV CUDA_HOME=${CUDA_HOME:-/usr/local/cuda-13.0}
+export VERL_ROOT VERL_VENV CUDA_HOME=${CUDA_HOME:-"/usr/local/cuda-$MAPD_CUDA_SERIES"}
 export PATH="$CUDA_HOME/bin:$HOME/.local/bin:$PATH"
 export UV_CACHE_DIR HF_HOME HF_ENDPOINT UV_DEFAULT_INDEX UV_HTTP_TIMEOUT
 export UV_CONCURRENT_DOWNLOADS PIP_INDEX_URL
+export MAPD_BOOTSTRAP_SCHEMA MAPD_VERL_REF MAPD_MODEL_ID MAPD_NUMPY_VERSION
+export MAPD_CUDA_SERIES
 
 section() {
   echo
   echo "===== $1 ====="
+}
+
+check_base_image() {
+  section "0/5 base image contract"
+  if [[ ! -r /etc/os-release ]]; then
+    echo "ERROR: /etc/os-release is unavailable; Ubuntu 24.04 is required." >&2
+    exit 8
+  fi
+
+  # The checked-out MAPD repository, Bash, apt/sudo and the NVIDIA driver are
+  # the only assumed inputs. Everything else is installed below.
+  # shellcheck source=/etc/os-release
+  source /etc/os-release
+  if [[ "${ID:-}" != ubuntu || "${VERSION_ID:-}" != 24.04 ]]; then
+    echo "ERROR: expected Ubuntu 24.04, found ${PRETTY_NAME:-unknown}." >&2
+    exit 8
+  fi
+  if [[ "$(uname -m)" != x86_64 ]]; then
+    echo "ERROR: expected x86_64, found $(uname -m)." >&2
+    exit 8
+  fi
+  for command_name in bash apt-get apt-cache nvidia-smi; do
+    if ! command -v "$command_name" >/dev/null 2>&1; then
+      echo "ERROR: base image must provide $command_name." >&2
+      exit 9
+    fi
+  done
+  if (( EUID != 0 )) && ! command -v sudo >/dev/null 2>&1; then
+    echo "ERROR: a non-root account must provide sudo." >&2
+    exit 9
+  fi
+
+  echo "Base image: $PRETTY_NAME ($(uname -m))"
+  nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
 }
 
 have_system_stack() {
@@ -51,8 +99,8 @@ have_system_stack() {
     command -v git >/dev/null 2>&1 &&
     command -v gcc >/dev/null 2>&1 &&
     command -v ninja >/dev/null 2>&1 &&
-    [[ -x /usr/local/cuda-13.0/bin/nvcc ]] &&
-    [[ -f /usr/local/cuda-13.0/include/curand.h ]]
+    [[ -x "$CUDA_HOME/bin/nvcc" ]] &&
+    [[ -f "$CUDA_HOME/include/curand.h" ]]
 }
 
 install_system_stack() {
@@ -62,31 +110,30 @@ install_system_stack() {
     return
   fi
 
-  if ! command -v sudo >/dev/null 2>&1; then
-    echo "ERROR: sudo is required to install the system build stack." >&2
-    exit 10
-  fi
-
-  if ! apt-cache show cuda-compiler-13-0 >/dev/null 2>&1; then
-    local keyring
-    keyring=$(mktemp --suffix=.deb)
-    curl -fL --retry 5 --retry-all-errors \
-      https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
-      -o "$keyring"
-    sudo dpkg -i "$keyring"
-    rm -f -- "$keyring"
-  fi
-
-  sudo apt-get update
-  sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  "${SUDO[@]}" apt-get update
+  "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y \
     ca-certificates \
     curl \
     git \
     build-essential \
     python3.12-dev \
-    ninja-build \
-    cuda-compiler-13-0 \
-    libcurand-dev-13-0
+    ninja-build
+
+  local cuda_suffix=${MAPD_CUDA_SERIES/./-}
+  if ! apt-cache show "cuda-compiler-$cuda_suffix" >/dev/null 2>&1; then
+    local keyring
+    keyring=$(mktemp --suffix=.deb)
+    curl -fL --retry 5 --retry-all-errors \
+      https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
+      -o "$keyring"
+    "${SUDO[@]}" dpkg -i "$keyring"
+    rm -f -- "$keyring"
+    "${SUDO[@]}" apt-get update
+  fi
+
+  "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    "cuda-compiler-$cuda_suffix" \
+    "libcurand-dev-$cuda_suffix"
 
   have_system_stack || {
     echo "ERROR: system build stack is still incomplete after apt installation." >&2
@@ -133,10 +180,27 @@ have_python_stack() {
     "$VERL_VENV/bin/python" -c "import torch, verl, vllm" >/dev/null 2>&1
 }
 
+report_python_stack() {
+  if [[ ! -e "$VERL_VENV" ]]; then
+    echo "Virtual environment: MISSING ($VERL_VENV)"
+    echo "A clean environment will be created from veRL's uv.lock."
+  elif [[ ! -x "$VERL_VENV/bin/python" ]]; then
+    echo "Virtual environment: INCOMPLETE ($VERL_VENV)"
+    echo "The existing directory will be repaired from veRL's uv.lock."
+  elif have_python_stack; then
+    echo "Virtual environment: HEALTHY ($VERL_VENV)"
+    echo "The persistent environment can be reused."
+  else
+    echo "Virtual environment: BROKEN ($VERL_VENV)"
+    echo "Missing or unusable Python packages will be repaired from veRL's uv.lock."
+  fi
+}
+
 install_python_stack() {
   section "2/5 veRL Python environment"
   clone_verl_if_needed
   install_uv_if_needed
+  report_python_stack
 
   if have_python_stack; then
     echo "Reusing working environment: $VERL_VENV"
@@ -160,13 +224,12 @@ install_python_stack() {
 
   "$VERL_VENV/bin/python" -m pip install \
     --disable-pip-version-check \
-    "pytest>=8,<9" \
-    "pyarrow>=17,<22"
+    -r "$PROJECT_ROOT/requirements/server-bootstrap.txt"
   "$VERL_VENV/bin/python" -m pip install \
     --disable-pip-version-check \
     --force-reinstall \
     --no-deps \
-    "numpy==2.3.5"
+    "numpy==$MAPD_NUMPY_VERSION"
 
   have_python_stack || {
     echo "ERROR: torch, veRL, or vLLM is not importable." >&2
@@ -216,8 +279,15 @@ echo "project: $PROJECT_ROOT"
 echo "workspace: $WORKSPACE_ROOT"
 echo "veRL: $VERL_ROOT"
 echo "model: $MODEL_ROOT"
+echo "versions: $VERSIONS_FILE"
 echo "log: $BOOTSTRAP_LOG"
+if [[ -s "$MODEL_ROOT/config.json" ]]; then
+  echo "model cache: PRESENT"
+else
+  echo "model cache: MISSING (download required)"
+fi
 
+check_base_image
 install_system_stack
 install_python_stack
 install_mapd

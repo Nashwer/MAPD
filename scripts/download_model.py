@@ -3,11 +3,12 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 
-MODEL_ID = "Qwen/Qwen3-1.7B"
+MODEL_ID = os.environ.get("MAPD_MODEL_ID", "Qwen/Qwen3-1.7B")
 
 
 def main() -> int:

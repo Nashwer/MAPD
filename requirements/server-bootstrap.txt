@@ -1,0 +1,3 @@
+# Packages layered on top of veRL's frozen FSDP + vLLM environment.
+pytest==8.4.2
+pyarrow==21.0.0
