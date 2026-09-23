@@ -1,7 +1,42 @@
-# Linux deployment without uv
+# Reproducible Linux GPU deployment
 
-The MAPD repository reuses the already-tested veRL virtual environment. It does
-not run `uv sync` and therefore does not mutate veRL's lock-file environment.
+## One-command rebuild for ephemeral instances
+
+After the MAPD repository is present, rebuild or repair the complete server
+environment with one command:
+
+```bash
+cd ~/workspace/MAPD-repro && bash mapd.sh bootstrap
+```
+
+The bootstrap is idempotent. It installs only missing system packages, reuses
+an importable `~/workspace/verl/.venv`, reuses the model under
+`~/models/Qwen3-1.7B`, installs MAPD, runs offline tests and a real agent
+trajectory, and writes an exact environment record to
+`artifacts/environment/manifest.json`. Its full terminal log is retained under
+`logs/bootstrap-*.log`.
+
+On a completely blank home directory, clone MAPD first and then run the same
+bootstrap command. The script clones the tagged veRL `v0.9.1` checkout when
+the sibling `~/workspace/verl` checkout is absent. If `/home` is persistent
+between daily GPU instances, the large Python environment and model download
+are reused while the reset system packages are repaired.
+
+For a dependency-only rebuild without downloading/loading the model:
+
+```bash
+bash mapd.sh bootstrap --skip-model --skip-verify
+```
+
+The maintained bootstrap contract currently includes Python 3.12 headers,
+Ninja, the CUDA 13.0 compiler, cuRAND headers, veRL FSDP + vLLM, NumPy 2.3.5,
+PyArrow, pytest, MAPD, and Qwen3-1.7B. New module dependencies must be added to
+`scripts/bootstrap_server.sh` as part of the same code change.
+
+## Reuse an existing veRL environment
+
+The lighter `setup` command reuses an already-tested veRL virtual environment.
+It does not run `uv sync` and therefore does not mutate that environment.
 
 With veRL already located at `~/workspace/verl`, deployment and complete
 verification are intentionally reduced to two commands:

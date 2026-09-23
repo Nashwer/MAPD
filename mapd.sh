@@ -14,6 +14,7 @@ usage() {
 Usage: bash mapd.sh COMMAND
 
 Commands:
+  bootstrap  Rebuild or repair the complete ephemeral GPU-server environment
   setup    Install into the sibling veRL environment and run full verification
   verify   Run tests and the offline end-to-end smoke flow
   model-smoke  Load the local Qwen model and run one GPU inference
@@ -29,6 +30,9 @@ EOF
 }
 
 case ${1:-} in
+  bootstrap)
+    bash "$PROJECT_ROOT/scripts/bootstrap_server.sh" "${@:2}"
+    ;;
   setup)
     bash "$PROJECT_ROOT/scripts/install_linux.sh"
     bash "$PROJECT_ROOT/scripts/run_smoke.sh"

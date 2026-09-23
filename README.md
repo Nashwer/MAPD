@@ -10,6 +10,7 @@
 - 依赖感知 Orchestrator、独立多查询 Searcher、Answerer、Repair、Protocolizer
 - Schema、EM、抽取式 grounding、答案泄漏质量门
 - student 多轮搜索环境、G 路 rollout、EM reward 和 self-rollout fallback
+- Qwen3-1.7B/vLLM 真实 GPU 搜索轨迹验证
 - GRPO、完整词表 OPSD reverse-KL、stop-gradient privileged branch 的参考实现
 - 可重复、可断点续跑的 JSONL artifacts
 - 无网络、无 API、无 GPU 的端到端 smoke test
@@ -71,14 +72,14 @@ mapd prepare-data  转换为 veRL 风格训练 JSONL
 完整流程和模块边界见 [`docs/architecture.md`](docs/architecture.md)，论文逐项覆盖情况见
 [`docs/reproduction-matrix.md`](docs/reproduction-matrix.md)。
 
-Linux GPU 服务器复用现有 veRL 虚拟环境、且完全绕过 uv 的部署步骤见
+Linux GPU 服务器的可重复部署步骤见
 [`docs/deployment.md`](docs/deployment.md)。
 其中包含纯命令行后台任务管理：`start/status/logs/follow/stop/jobs`，不依赖图形界面。
 
-服务器首次验证只需：
+一天期 GPU 实例的完整重建、模型复用与验证只需：
 
 ```bash
-cd ~/workspace/MAPD-repro && bash mapd.sh setup
+cd ~/workspace/MAPD-repro && bash mapd.sh bootstrap
 ```
 
 
