@@ -1,0 +1,3 @@
+{"id":"smoke-1","question":"In which city is the Eiffel Tower located?","answers":["Paris"],"split":"train","data_source":"nq"}
+{"id":"smoke-2","question":"Which actor directed The Winter Guest and also appeared in Die Hard?","answers":["Alan Rickman"],"split":"train","data_source":"hotpotqa"}
+

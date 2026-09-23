@@ -1,0 +1,43 @@
+run:
+  seed: 42
+  artifact_dir: artifacts/smoke
+  progress_every: 1
+teacher:
+  backend: mock
+  model: mock-mapd-teacher
+  base_url: null
+  api_key_env: MAPD_TEACHER_API_KEY
+  timeout_seconds: 30
+  max_retries: 2
+retrieval:
+  backend: bm25
+  corpus_path: tests/fixtures/corpus.jsonl
+  url: null
+  top_k: 3
+mas:
+  max_subquestions: 4
+  max_rounds: 2
+  max_queries_per_searcher: 3
+  max_repair_rounds: 2
+data:
+  training_datasets: [nq, hotpotqa]
+  evaluation_datasets: [nq, triviaqa, popqa, hotpotqa, 2wikimultihopqa, musique, bamboogle]
+  retrieval_corpus: fixture-bm25
+training:
+  model: Qwen/Qwen3-1.7B
+  group_size: 2
+  batch_size: 2
+  max_prompt_length: 1024
+  max_response_length: 128
+  max_turns: 2
+  learning_rate: 0.000001
+  warmup_ratio: 0.1
+  total_steps: 2
+  lambda_opsd: 0.05
+  clip_low: 0.2
+  clip_high: 0.2
+  reference_kl_beta: 0.0
+  num_gpus: 1
+evaluation:
+  seeds: [0]
+  metric: exact_match

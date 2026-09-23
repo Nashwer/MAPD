@@ -1,0 +1,46 @@
+run:
+  seed: 42
+  artifact_dir: artifacts/paper_like
+  progress_every: 100
+teacher:
+  backend: openai_compatible
+  model: ${MAPD_TEACHER_MODEL}
+  base_url: ${MAPD_TEACHER_BASE_URL}
+  api_key_env: MAPD_TEACHER_API_KEY
+  timeout_seconds: 120
+  max_retries: 5
+retrieval:
+  backend: http
+  corpus_path: null
+  url: ${MAPD_RETRIEVER_URL}
+  top_k: 3
+mas:
+  max_subquestions: 4
+  max_rounds: 2
+  max_queries_per_searcher: 3
+  max_repair_rounds: 2
+data:
+  training_datasets: [nq, hotpotqa]
+  evaluation_datasets: [nq, triviaqa, popqa, hotpotqa, 2wikimultihopqa, musique, bamboogle]
+  retrieval_corpus: wiki-18
+training:
+  model: Qwen/Qwen3-1.7B
+  group_size: 8
+  batch_size: 128
+  max_prompt_length: 4096
+  max_response_length: 512
+  max_turns: 4
+  learning_rate: 0.000001
+  warmup_ratio: 0.1
+  total_steps: 200
+  lambda_opsd: 0.05
+  # The paper states a clipped GRPO objective but does not report epsilon/beta.
+  # These are explicit reproduction choices and must be tracked in experiment manifests.
+  clip_low: 0.2
+  clip_high: 0.2
+  reference_kl_beta: 0.0
+  num_gpus: 8
+evaluation:
+  # The paper reports five evaluation seeds but does not list their values.
+  seeds: [0, 1, 2, 3, 4]
+  metric: exact_match
