@@ -1,6 +1,7 @@
 from mapd.environment.search_env import AgenticSearchEnvironment, ScriptedPolicy, generated_trajectory_text
 from mapd.data.schema import QASample
 from mapd.retrieval.wiki18 import BM25Retriever
+from mapd.reward.exact_match import exact_match
 
 
 def test_agentic_search_rollout_executes_tool_and_scores_em():
@@ -22,3 +23,11 @@ def test_agentic_search_rollout_executes_tool_and_scores_em():
     assert trajectory.terminated
     assert trajectory.turns[0].observation.startswith("<information>")
     assert "<information>" not in generated_trajectory_text(trajectory)
+
+
+def test_strict_em_rejects_explanatory_sentence_around_correct_answer():
+    assert exact_match("Alan Rickman", ["Alan Rickman"])
+    assert not exact_match(
+        "The 1997 film The Winter Guest was directed by Alan Rickman.",
+        ["Alan Rickman"],
+    )

@@ -46,7 +46,10 @@ def main() -> int:
     )
     sample = QASample(
         id="agent-smoke-1",
-        question="Who directed the 1997 film The Winter Guest?",
+        question=(
+            "Who directed the 1997 film The Winter Guest? "
+            "Return only the director's name inside the answer tag."
+        ),
         answers=["Alan Rickman"],
         split="smoke",
         data_source="fixture",

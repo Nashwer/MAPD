@@ -13,7 +13,9 @@ from mapd.reward.exact_match import exact_match
 
 AGENT_SYSTEM_PROMPT = """Answer the question by reasoning and using the search tool when needed.
 Issue a query as <search>query</search>. The environment will return <information>...</information>.
-When ready, finish with <answer>short answer</answer>."""
+When ready, finish with <answer>short answer</answer>.
+The answer tag must contain only the minimal answer span, never an explanatory sentence.
+For example, use <answer>Paris</answer>, not <answer>The city is Paris.</answer>."""
 
 
 class StudentPolicy(Protocol):
