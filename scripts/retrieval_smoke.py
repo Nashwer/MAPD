@@ -26,10 +26,11 @@ def main() -> int:
     samples = read_jsonl(args.qa, QASample)[: args.limit]
     if not samples:
         raise ValueError("QA input is empty")
-    retriever = HTTPRetriever(args.url, timeout_seconds=120)
+    retriever = HTTPRetriever(args.url, timeout_seconds=60)
     hits = 0
     examples = []
-    for sample in samples:
+    for index, sample in enumerate(samples, start=1):
+        print(f"retrieval query {index}/{len(samples)}: {sample.question}", flush=True)
         passages = retriever.search(sample.question, args.top_k)
         haystack = normalize_answer("\n".join(item.contents for item in passages))
         matched = any(
@@ -45,6 +46,11 @@ def main() -> int:
                 "retrieved": len(passages),
                 "top_ids": [item.id for item in passages],
             }
+        )
+        print(
+            f"retrieval result {index}/{len(samples)}: "
+            f"documents={len(passages)} hit={matched}",
+            flush=True,
         )
     recall = hits / len(samples)
     summary = {

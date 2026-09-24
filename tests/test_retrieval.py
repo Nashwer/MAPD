@@ -74,3 +74,14 @@ def test_full_corpus_query_plan_drops_high_frequency_question_words():
     assert _fts_expression(tokens, operator="AND") == (
         '"directed" AND "1997" AND "film" AND "winter" AND "guest"'
     )
+
+
+def test_sqlite_retriever_rejects_nonpositive_query_timeout(tmp_path):
+    index = tmp_path / "wiki.sqlite3"
+    build_sqlite_fts_index("tests/fixtures/corpus.jsonl", index)
+    try:
+        SQLiteFTSRetriever(index, query_timeout_seconds=0)
+    except ValueError as exc:
+        assert "query_timeout_seconds" in str(exc)
+    else:  # pragma: no cover - assertion helper without pytest dependency
+        raise AssertionError("nonpositive timeout should be rejected")

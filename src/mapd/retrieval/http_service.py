@@ -79,8 +79,11 @@ def serve_retriever(
     host: str = "127.0.0.1",
     port: int = 8000,
     default_top_k: int = 3,
+    query_timeout_seconds: float = 20.0,
 ) -> None:
-    retriever = SQLiteFTSRetriever(index_path)
+    retriever = SQLiteFTSRetriever(
+        index_path, query_timeout_seconds=query_timeout_seconds
+    )
     server = RetrievalHTTPServer((host, port), RetrievalHandler)
     server.retriever = retriever
     server.default_top_k = default_top_k

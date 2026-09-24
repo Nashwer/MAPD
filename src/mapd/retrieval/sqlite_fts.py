@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import tarfile
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -150,8 +151,11 @@ def build_sqlite_fts_index(
 class SQLiteFTSRetriever:
     """Disk-backed BM25 retriever suitable for the full wiki-18 corpus."""
 
-    def __init__(self, index_path: str | Path):
+    def __init__(self, index_path: str | Path, *, query_timeout_seconds: float = 20.0):
         self.index_path = Path(index_path)
+        if query_timeout_seconds <= 0:
+            raise ValueError("query_timeout_seconds must be positive")
+        self.query_timeout_seconds = query_timeout_seconds
         if not self.index_path.is_file():
             raise FileNotFoundError(self.index_path)
         with self._connect() as connection:
@@ -175,14 +179,22 @@ class SQLiteFTSRetriever:
         if not expression:
             return []
         with self._connect() as connection:
-            rows = _search_rows(connection, expression, top_k)
+            rows = _bounded_search_rows(
+                connection,
+                expression,
+                top_k,
+                timeout_seconds=self.query_timeout_seconds,
+            )
             if not rows and len(tokens) > 1:
                 # Relax only to a few selective terms. OR-ing every word in a
                 # natural-language question can scan enormous posting lists
                 # (for example "who", "the", "is") on the 21M-doc corpus.
                 fallback = sorted(tokens, key=lambda token: (-len(token), token))[:3]
-                rows = _search_rows(
-                    connection, _fts_expression(fallback, operator="OR"), top_k
+                rows = _bounded_search_rows(
+                    connection,
+                    _fts_expression(fallback, operator="OR"),
+                    top_k,
+                    timeout_seconds=self.query_timeout_seconds,
                 )
         return [
             RetrievedPassage(id=str(row[0]), contents=str(row[1]), score=-float(row[2]))
@@ -225,17 +237,76 @@ def _fts_expression(tokens: list[str], *, operator: str) -> str:
 def _search_rows(
     connection: sqlite3.Connection, expression: str, top_k: int
 ) -> list[tuple[object, ...]]:
+    # FTS5's hidden rank column is equivalent to bm25() by default, but its
+    # LIMIT-aware query path is substantially faster than ORDER BY bm25().
     return connection.execute(
         """
-        SELECT passages.id, passages.contents, bm25(passages_fts) AS rank
+        SELECT passages.id, passages.contents, passages_fts.rank
         FROM passages_fts
         JOIN passages ON passages.rowid = passages_fts.rowid
         WHERE passages_fts MATCH ?
-        ORDER BY rank
+        ORDER BY passages_fts.rank
         LIMIT ?
         """,
         (expression, top_k),
     ).fetchall()
+
+
+def _bounded_search_rows(
+    connection: sqlite3.Connection,
+    expression: str,
+    top_k: int,
+    *,
+    timeout_seconds: float,
+) -> list[tuple[object, ...]]:
+    """Run ranked retrieval with a wall-clock guard and a fast safe fallback.
+
+    The full wiki index is commonly stored on network-backed home volumes. A
+    broad ranked query must not keep the HTTP request alive indefinitely. If
+    SQLite exceeds the deadline, return the first matching rows without a
+    global relevance sort; the AND-first query still keeps these candidates
+    useful, and callers receive a response instead of a multi-minute timeout.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    connection.set_progress_handler(
+        lambda: int(time.monotonic() >= deadline),
+        1_000,
+    )
+    try:
+        return _search_rows(connection, expression, top_k)
+    except sqlite3.OperationalError as exc:
+        if "interrupted" not in str(exc).casefold():
+            raise
+        print(
+            f"ranked FTS query exceeded {timeout_seconds:g}s; using unranked fallback",
+            flush=True,
+        )
+    finally:
+        connection.set_progress_handler(None, 0)
+
+    fallback_deadline = time.monotonic() + min(timeout_seconds, 5.0)
+    connection.set_progress_handler(
+        lambda: int(time.monotonic() >= fallback_deadline),
+        1_000,
+    )
+    try:
+        return connection.execute(
+            """
+            SELECT passages.id, passages.contents, 0.0 AS rank
+            FROM passages_fts
+            JOIN passages ON passages.rowid = passages_fts.rowid
+            WHERE passages_fts MATCH ?
+            LIMIT ?
+            """,
+            (expression, top_k),
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "interrupted" not in str(exc).casefold():
+            raise
+        print("unranked FTS fallback also timed out; returning no rows", flush=True)
+        return []
+    finally:
+        connection.set_progress_handler(None, 0)
 
 
 @contextmanager
