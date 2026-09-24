@@ -11,9 +11,11 @@ cd ~/workspace/MAPD-repro && bash mapd.sh bootstrap
 
 No persistent `/home` directory is assumed. The minimum base-image contract is
 Ubuntu 24.04 x86_64, a working NVIDIA driver/GPU, Bash, `apt`, root access (or
-`sudo`), and a checked-out copy of this repository. The bootstrap verifies that contract and
-then obtains every other system package, Python package, source checkout, and
-model required by the current repository revision.
+`sudo`), and a checked-out copy of this repository. The bootstrap verifies that
+contract and then obtains every other system package, Python package, source
+checkout, and model required by the current repository revision. Network access
+to Ubuntu/NVIDIA package repositories, GitHub, Python package indexes, and the
+configured Hugging Face endpoint is required for an empty machine.
 
 The bootstrap is idempotent. It classifies the virtual environment as
 `MISSING`, `INCOMPLETE`, `BROKEN`, or `HEALTHY`. A missing or damaged
@@ -43,6 +45,31 @@ PyArrow, pytest, MAPD, and Qwen3-1.7B. Pinned stack inputs live in
 `requirements/server-bootstrap.txt`. Future modules must update these files
 and the bootstrap script in the same code change, so the one-command rebuild
 remains complete.
+
+## Current verification baseline
+
+The component stack was verified on an NVIDIA GeForce RTX 4090 D (24 GB) with
+Python 3.12.3, PyTorch 2.11.0+cu130, vLLM 0.24.0, NumPy 2.3.5, and the CUDA
+13.0 compiler/toolkit. Both the standalone model generation and the real
+Qwen3-1.7B -> fixture BM25 -> Qwen3-1.7B agent trajectory passed. The latter
+ended with strict exact-match reward `1.0` and `AGENT SMOKE OK`.
+
+The dependencies were discovered and verified on the current server before the
+bootstrap was consolidated. The consolidated script itself still needs its
+first acceptance run on a new instance with an empty `/home`. After that run,
+success requires all of the following:
+
+```text
+Virtual environment: HEALTHY (or a successful MISSING -> creation path)
+22 passed
+AGENT SMOKE OK
+BOOTSTRAP OK
+```
+
+The exact package/Git/CUDA record from each successful instance is written to
+`artifacts/environment/manifest.json`. Do not diagnose future instances from
+screenshots of the full traceback; retain `logs/bootstrap-*.log` and extract the
+first root-cause error instead.
 
 ## Reuse an existing veRL environment
 
@@ -148,3 +175,31 @@ point for veRL. The real MAPD optimizer still requires a version-pinned veRL
 adapter that performs a second, stop-gradient forward pass under privileged
 protocol context. The CPU smoke objective is an invariant test, not a claim
 that distributed MAPD training is already implemented.
+
+## Single-GPU optimizer acceptance
+
+After bootstrap and agent smoke succeed, run the next acceptance stage:
+
+```bash
+bash mapd.sh train-smoke > train-smoke.log 2>&1
+tail -n 80 train-smoke.log
+```
+
+The command deliberately uses two processes so the vLLM engine has released
+GPU memory before the differentiable model is loaded. It records exact rollout
+token ids/log-probabilities, replays the same response tokens under student and
+protocol-conditioned contexts, performs full-vocabulary reverse KL with the
+privileged branch detached, updates the final decoder layer, and reloads the
+saved checkpoint.
+
+Successful acceptance ends with:
+
+```text
+TRAINING ROLLOUT OK
+MAPD OPTIMIZER SMOKE OK
+```
+
+Artifacts are written under `artifacts/train_smoke/`. This is intentionally a
+single-GPU, one-step engineering test. It does not claim fidelity to the
+paper's full-parameter, 8-GPU, 200-step run, and it does not yet use veRL's
+distributed actor worker.

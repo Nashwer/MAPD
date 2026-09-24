@@ -19,6 +19,7 @@ Commands:
   verify   Run tests and the offline end-to-end smoke flow
   model-smoke  Load the local Qwen model and run one GPU inference
   agent-smoke  Run one real Qwen -> BM25 search -> answer trajectory
+  train-smoke  Run rollout, dual-context MAPD update, and checkpoint reload
   start    Run verification in the background
   status   Show background job and GPU status
   logs     Show the last 200 log lines
@@ -47,6 +48,17 @@ case ${1:-} in
   agent-smoke)
     cd "$PROJECT_ROOT"
     "$VERL_VENV/bin/python" "$PROJECT_ROOT/scripts/agent_smoke.py" "${2:-}"
+    ;;
+  train-smoke)
+    cd "$PROJECT_ROOT"
+    MODEL_PATH=${2:-${MAPD_MODEL_PATH:-"$HOME/models/Qwen3-1.7B"}}
+    if [[ ! -s "$PROJECT_ROOT/artifacts/smoke/artifacts.jsonl" ]]; then
+      bash "$PROJECT_ROOT/scripts/run_smoke.sh"
+    fi
+    "$VERL_VENV/bin/python" "$PROJECT_ROOT/scripts/training_smoke_rollout.py" \
+      --model "$MODEL_PATH"
+    "$VERL_VENV/bin/python" "$PROJECT_ROOT/scripts/training_smoke_optimize.py" \
+      --model "$MODEL_PATH"
     ;;
   start)
     bash "$PROJECT_ROOT/scripts/jobctl.sh" start verify bash "$PROJECT_ROOT/scripts/run_smoke.sh"

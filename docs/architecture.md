@@ -81,8 +81,9 @@ student rollout, or retrieval queries.
 | `reward` | normalized exact-match terminal reward | `exact_match()` |
 | `evaluation` | benchmark-level QA aggregation | `evaluate_trajectories()` |
 
-The lightweight core deliberately has no CUDA imports. The production backend will implement the backend
-contract with veRL/vLLM or SGLang on Linux GPUs while the data, environment, and objective invariants remain
+The lightweight core deliberately has no CUDA imports. A separate vLLM policy adapter now implements real
+single-GPU generation and has been verified with Qwen3-1.7B. The production training backend must still
+implement the backend contract with veRL while the data, environment, and objective invariants remain
 testable on Windows.
 
 ## 3. Token and gradient contract
@@ -116,14 +117,34 @@ online_smoke.json    CPU mock rollout/reward/PI/loss integration trace
 Malformed protocol JSON is retained as `raw_protocol`, marked as a schema failure, and routed to online
 self-rollout fallback rather than crashing synthesis.
 
-## 5. What remains backend-specific
+## 5. Verified execution boundary
+
+The current GPU smoke test exercises this concrete path:
+
+```text
+Qwen3-1.7B/vLLM -> <search> -> fixture BM25 -> <information>
+                 -> Qwen3-1.7B/vLLM -> <answer> -> strict EM reward
+```
+
+It verifies inference-time state transitions and artifact serialization, but it does not collect training
+log probabilities, replay tokens through the privileged branch, backpropagate a joint objective, or update
+model weights. Full wiki-18 retrieval is also outside this already-verified smoke boundary.
+
+The separate `train-smoke` acceptance path now implements those missing single-device mechanics in two
+processes: vLLM first records exact response token ids and rollout log-probabilities; after vLLM exits, a
+Transformers model replays the same tokens under normal and protocol-conditioned contexts, performs the
+joint backward pass, updates the last decoder layer, saves a checkpoint, and reloads it. This path is
+implemented but remains pending real Qwen GPU verification.
+
+## 6. What remains backend-specific
 
 The paper does not publish its role prompts, GRPO clipping coefficient, reference-KL coefficient, five seed
-values, tokenizer alignment code, or trainer patch. The official repository currently contains only a
-“Coming soon” README. Therefore those items cannot honestly be called exact reproduction yet. They are
-isolated behind configuration and `OnPolicyTrainingBackend` so that official code or experimentally verified
-choices can replace them without changing the offline artifacts.
+values, tokenizer alignment code, or trainer patch. This repository has not integrated an authoritative
+trainer implementation for those missing details, so they cannot honestly be called exact reproduction yet.
+They are isolated behind configuration and `OnPolicyTrainingBackend` so that authoritative code or
+experimentally verified choices can replace them without changing the offline artifacts.
 
-The next implementation milestone is a tiny-model Linux test of the veRL backend: generate a real rollout,
-replay its exact tokens through both branches, assert positional alignment, run one optimizer step, and reload
-the checkpoint before scaling to Qwen3-1.7B/4B.
+The next acceptance milestone is to run `bash mapd.sh train-smoke` on Qwen3-1.7B. Once it passes, the next
+implementation milestone is moving the same full-vocabulary dual-forward objective into a veRL worker. A
+standard veRL custom policy-loss hook is insufficient because it receives selected-token log-probabilities,
+whereas MAPD OPSD requires both branches' complete vocabulary logits.

@@ -62,6 +62,14 @@ class AgenticSearchEnvironment:
         terminated = False
         for turn_index in range(1, self.max_turns + 1):
             output = policy.generate(messages, max_new_tokens)
+            token_ids = getattr(policy, "last_token_ids", None)
+            token_log_probs = getattr(policy, "last_token_log_probs", None)
+            trace = {
+                "token_ids": list(token_ids) if token_ids is not None else None,
+                "token_log_probs": (
+                    list(token_log_probs) if token_log_probs is not None else None
+                ),
+            }
             action = parse_action(output)
             if action.kind == "answer":
                 final_answer = action.value
@@ -72,6 +80,7 @@ class AgenticSearchEnvironment:
                         model_output=output,
                         action="answer",
                         answer=final_answer,
+                        **trace,
                     )
                 )
                 break
@@ -85,6 +94,7 @@ class AgenticSearchEnvironment:
                         action="search",
                         query=query,
                         observation=observation,
+                        **trace,
                     )
                 )
                 messages.extend(
@@ -94,7 +104,14 @@ class AgenticSearchEnvironment:
                     ]
                 )
                 continue
-            turns.append(AgentTurn(turn_index=turn_index, model_output=output, action="invalid"))
+            turns.append(
+                AgentTurn(
+                    turn_index=turn_index,
+                    model_output=output,
+                    action="invalid",
+                    **trace,
+                )
+            )
             messages.extend(
                 [
                     {"role": "assistant", "content": output},
@@ -104,6 +121,7 @@ class AgenticSearchEnvironment:
         return AgentTrajectory(
             example_id=sample.id,
             prompt=sample.question,
+            system_prompt=self.system_prompt,
             turns=turns,
             final_answer=final_answer,
             reward=float(exact_match(final_answer, sample.answers)),

@@ -15,6 +15,21 @@
 - 可重复、可断点续跑的 JSONL artifacts
 - 无网络、无 API、无 GPU 的端到端 smoke test
 
+## 当前进度
+
+截至 2026-09-24，轻量核心的 22 项本地测试全部通过；Qwen3-1.7B 已在 RTX
+4090 D 上通过真实 vLLM 推理和两轮 agent 搜索验证。真实轨迹完成了
+`<search>` → BM25 `<information>` → `<answer>`，严格 EM reward 为 `1.0`。
+
+仓库已经包含面向一天期 GPU 实例的一键重建脚本，但最新脚本仍需在下一台
+`/home` 全空的新实例上做首次端到端验收。单卡双上下文 token replay、全词表
+OPSD、一次 optimizer step 和 checkpoint reload 的 `train-smoke` 代码已经实现，
+仍待 GPU 验收；分布式 veRL worker、完整 wiki-18、论文规模训练和七数据集评测尚未完成。
+不能将任一 smoke 通过等同于论文结果复现。
+
+详细的完成项、验证环境、待办边界和下次继续顺序见
+[`docs/current-status.md`](docs/current-status.md)。
+
 ## 目录结构
 
 ```text
@@ -65,6 +80,7 @@ mapd smoke         使用 fixture 跑通离线合成 + 在线 rollout/reward/PI/
 mapd synthesize    对 QA JSONL 执行协议合成与质量门
 mapd validate      重新验证已有协议 artifact
 mapd prepare-data  转换为 veRL 风格训练 JSONL
+mapd evaluate-trajectories  汇总已保存轨迹的严格 EM
 ```
 
 真实 API 配置参考 `.env.example`。密钥、数据集、Wikipedia 索引、运行产物、模型和 checkpoint 不进入 Git。
@@ -87,6 +103,17 @@ cd ~/workspace/MAPD-repro && bash mapd.sh bootstrap
 清单重建或修复，已有缓存仅用于加速。版本入口为
 `scripts/bootstrap_versions.env`，附加 Python 依赖位于
 `requirements/server-bootstrap.txt`。
+
+部署完成后，下一阶段的单卡训练闭环验收使用：
+
+```bash
+bash mapd.sh train-smoke
+```
+
+它分两个进程执行：先用 vLLM 保存带精确 token/log-prob 的 rollout 并退出释放显存，
+再用同一 Qwen checkpoint 重放普通/特权上下文，只训练最后一个 decoder layer，执行一次
+MAPD 联合反传，并验证 checkpoint 能恢复。该命令是低显存工程验收，不是论文的 8 GPU
+正式训练配置。
 
 
 ## 后续训练路线

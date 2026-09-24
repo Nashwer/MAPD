@@ -22,7 +22,21 @@ class FakeEngine:
         assert prompts == ["rendered prompt"]
         assert params.max_tokens == 64
         assert params.temperature == 0.0
-        return [SimpleNamespace(outputs=[SimpleNamespace(text=" <search>query</search> ")])]
+        assert params.logprobs == 1
+        return [
+            SimpleNamespace(
+                outputs=[
+                    SimpleNamespace(
+                        text=" <search>query</search> ",
+                        token_ids=[7, 8],
+                        logprobs=[
+                            {7: SimpleNamespace(logprob=-0.25)},
+                            {8: SimpleNamespace(logprob=-0.5)},
+                        ],
+                    )
+                ]
+            )
+        ]
 
 
 class FakeSamplingParams:
@@ -37,5 +51,7 @@ def test_vllm_policy_renders_messages_and_returns_generated_text():
 
     output = policy.generate(messages, max_new_tokens=64)
 
-    assert output == "<search>query</search>"
+    assert output == " <search>query</search> "
     assert tokenizer.messages == messages
+    assert policy.last_token_ids == [7, 8]
+    assert policy.last_token_log_probs == [-0.25, -0.5]

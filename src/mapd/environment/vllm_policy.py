@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
@@ -13,6 +13,8 @@ class VLLMStudentPolicy:
     tokenizer: Any
     sampling_params_type: Callable[..., Any]
     temperature: float = 0.0
+    last_token_ids: list[int] | None = field(default=None, init=False)
+    last_token_log_probs: list[float] | None = field(default=None, init=False)
 
     @classmethod
     def from_model(
@@ -48,6 +50,30 @@ class VLLMStudentPolicy:
         params = self.sampling_params_type(
             temperature=self.temperature,
             max_tokens=max_new_tokens,
+            logprobs=1,
         )
         request_output = self.engine.generate([prompt], params)[0]
-        return request_output.outputs[0].text.strip()
+        generation = request_output.outputs[0]
+        token_ids = getattr(generation, "token_ids", None)
+        self.last_token_ids = [int(token_id) for token_id in token_ids] if token_ids is not None else None
+        self.last_token_log_probs = _selected_token_log_probs(
+            self.last_token_ids,
+            getattr(generation, "logprobs", None),
+        )
+        return generation.text
+
+
+def _selected_token_log_probs(
+    token_ids: list[int] | None, candidates_by_position: Any
+) -> list[float] | None:
+    if token_ids is None or candidates_by_position is None:
+        return None
+    if len(token_ids) != len(candidates_by_position):
+        return None
+    selected: list[float] = []
+    for token_id, candidates in zip(token_ids, candidates_by_position):
+        if candidates is None or token_id not in candidates:
+            return None
+        value = candidates[token_id]
+        selected.append(float(getattr(value, "logprob", value)))
+    return selected
