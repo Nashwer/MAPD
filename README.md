@@ -19,7 +19,7 @@
 
 ## 当前进度
 
-截至 2026-09-24，轻量核心的 29 项本地测试全部通过（另 1 项无 Torch 时跳过）；Qwen3-1.7B 已在 RTX
+截至 2026-09-24，轻量核心的 30 项本地测试全部通过（另 1 项无 Torch 时跳过）；Qwen3-1.7B 已在 RTX
 4090 D 上通过真实 vLLM 推理和两轮 agent 搜索验证。真实轨迹完成了
 `<search>` → BM25 `<information>` → `<answer>`，严格 EM reward 为 `1.0`。
 单卡 `train-smoke` 也已完成真实 Qwen3-1.7B 双上下文反传、参数更新和

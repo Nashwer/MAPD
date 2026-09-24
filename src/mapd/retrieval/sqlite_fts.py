@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import codecs
 import gzip
 import json
 import os
 import re
 import sqlite3
+import tarfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Iterator
@@ -159,7 +162,36 @@ def _fts_expression(query: str) -> str:
     return " OR ".join(f'"{token.replace(chr(34), chr(34) * 2)}"' for token in tokens)
 
 
-def _open_text(path: Path) -> IO[str]:
+@contextmanager
+def _open_text(path: Path) -> Iterator[IO[str]]:
     if path.suffix == ".gz":
-        return gzip.open(path, "rt", encoding="utf-8")
-    return path.open("r", encoding="utf-8")
+        if _gzip_contains_tar(path):
+            # PeterJinGo/wiki-18-corpus names the asset .jsonl.gz, but the
+            # decompressed payload is a tar archive containing wiki_dump.jsonl.
+            # Stream the member directly to avoid a second ~14 GB disk copy.
+            with tarfile.open(path, mode="r|gz") as archive:
+                for member in archive:
+                    if not member.isfile():
+                        continue
+                    binary = archive.extractfile(member)
+                    if binary is None:
+                        continue
+                    print(f"reading archive member: {member.name}", flush=True)
+                    handle = codecs.getreader("utf-8")(binary)
+                    try:
+                        yield handle
+                    finally:
+                        handle.close()
+                    return
+            raise ValueError(f"gzip tar archive contains no regular file: {path}")
+        with gzip.open(path, "rt", encoding="utf-8") as handle:
+            yield handle
+        return
+    with path.open("r", encoding="utf-8") as handle:
+        yield handle
+
+
+def _gzip_contains_tar(path: Path) -> bool:
+    with gzip.open(path, "rb") as handle:
+        header = handle.read(512)
+    return len(header) >= 262 and header[257:262] == b"ustar"

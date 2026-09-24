@@ -209,7 +209,8 @@ distributed actor worker.
 After bootstrap, prepare the version-pinned Search-R1 NQ/HotpotQA data:
 
 ```bash
-bash mapd.sh data-setup | tee data-setup.log
+set -o pipefail
+bash mapd.sh data-setup 2>&1 | tee data-setup.log
 ```
 
 Success ends with `REAL DATA PREP OK`. Inspect the auditable counts without an

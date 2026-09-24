@@ -1,3 +1,6 @@
+import io
+import tarfile
+from pathlib import Path
 from threading import Thread
 
 from mapd.retrieval.http_service import RetrievalHandler, RetrievalHTTPServer
@@ -45,3 +48,16 @@ def test_http_service_uses_search_r1_contract(tmp_path):
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+def test_index_builder_streams_mislabeled_wiki18_tar_gzip(tmp_path):
+    corpus = tmp_path / "wiki-18.jsonl.gz"
+    payload = Path("tests/fixtures/corpus.jsonl").read_bytes()
+    with tarfile.open(corpus, mode="w:gz") as archive:
+        member = tarfile.TarInfo("data00/source/wiki_dump.jsonl")
+        member.size = len(payload)
+        archive.addfile(member, io.BytesIO(payload))
+    index = tmp_path / "wiki.sqlite3"
+    result = build_sqlite_fts_index(corpus, index)
+    assert result["documents"] == 3
+    assert SQLiteFTSRetriever(index).search("Eiffel Tower", 1)[0].id == "p1"
