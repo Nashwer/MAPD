@@ -160,7 +160,7 @@ def main() -> int:
             item["privileged_source"] == "protocol" and item["optimized"] for item in history
         ),
         "self_rollout_pi_steps": sum(
-            item["privileged_source"] == "self_rollout_fallback" and item["optimized"]
+            item["privileged_source"] == "self_rollout" and item["optimized"]
             for item in history
         ),
         "grpo_signal_steps": sum(

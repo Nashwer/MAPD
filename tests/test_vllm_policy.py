@@ -23,6 +23,8 @@ class FakeEngine:
         assert params.max_tokens == 64
         assert params.temperature == 0.0
         assert params.logprobs == 1
+        assert params.stop == ["</search>", "</answer>"]
+        assert params.include_stop_str_in_output is True
         return [
             SimpleNamespace(
                 outputs=[

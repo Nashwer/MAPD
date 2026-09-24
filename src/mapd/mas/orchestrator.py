@@ -34,26 +34,37 @@ class Orchestrator:
 
 
 def _parse_task_type(value: Any) -> TaskType:
-    normalized = str(value or "others").strip().lower().replace("-", "_").replace(" ", "_")
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("orchestrator task_type must be a non-empty string")
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
     try:
         return TaskType(normalized)
-    except ValueError:
-        return TaskType.OTHERS
+    except ValueError as exc:
+        allowed = ", ".join(item.value for item in TaskType)
+        raise ValueError(f"orchestrator task_type must be one of: {allowed}") from exc
 
 
 def parse_subtasks(raw: Any, round_index: int, prefix: str, limit: int) -> list[SubTask]:
     if not isinstance(raw, list):
-        return []
-    limited = [item for item in raw if isinstance(item, dict)][:limit]
+        raise TypeError("subtasks must be a JSON array")
+    if len(raw) > limit:
+        raise ValueError(f"subtasks exceeds configured maximum of {limit}")
+    if any(not isinstance(item, dict) for item in raw):
+        raise TypeError("each subtask must be a JSON object")
+    limited = raw
     original_ids = [str(item.get("id", f"s{index + 1}")) for index, item in enumerate(limited)]
+    if len(original_ids) != len(set(original_ids)):
+        raise ValueError("subtask ids must be unique")
     id_map = {item_id: f"{prefix}-{item_id}" for item_id in original_ids}
     parsed = []
     for index, item in enumerate(limited):
         objective = str(item.get("objective") or item.get("query") or "").strip()
         if not objective:
-            continue
+            raise ValueError("each subtask requires a non-empty objective")
         raw_dependencies = item.get("depends_on", [])
-        dependencies = raw_dependencies if isinstance(raw_dependencies, list) else []
+        if not isinstance(raw_dependencies, list):
+            raise TypeError("subtask depends_on must be a JSON array")
+        dependencies = raw_dependencies
         parsed.append(
             SubTask(
                 id=id_map[original_ids[index]],

@@ -297,17 +297,19 @@ bash mapd.sh protocol-smoke 20 2>&1 | tee protocol-smoke.log
 
 Every completed sample checkpoints immediately. Per-request token and estimated
 cost records are appended to
-`artifacts/protocol_smoke/teacher_usage.jsonl`; the final aggregate is stored in
-`artifacts/protocol_smoke/manifest.json`. A repository-wide ledger at
+`artifacts/protocol_smoke_r8/teacher_usage.jsonl`; the final aggregate is stored in
+`artifacts/protocol_smoke_r8/manifest.json`. A repository-wide ledger at
 `artifacts/teacher_usage.jsonl` makes the USD 5 guard cumulative across all
 shards on the instance instead of resetting per output directory. Re-running
-the same command reuses valid artifacts. Inspect results without exposing the
-key:
+the same command reuses valid artifacts. The manifest's `requests`, token, and
+cost fields describe the current shard; the corresponding `cumulative_*`
+fields describe the repository-wide budget ledger. Inspect results without
+exposing the key:
 
 ```bash
-tail -n 5 artifacts/protocol_smoke/teacher_usage.jsonl
-cat artifacts/protocol_smoke/manifest.json
-wc -l artifacts/protocol_smoke/artifacts.jsonl
+tail -n 5 artifacts/protocol_smoke_r8/teacher_usage.jsonl
+cat artifacts/protocol_smoke_r8/manifest.json
+wc -l artifacts/protocol_smoke_r8/artifacts.jsonl
 ```
 
 ## Portable protocol shards for expiring instances
@@ -331,15 +333,15 @@ complete checkpoint is included:
 bash mapd.sh protocol-export 0 100
 ```
 
-The command writes `exports/protocol_offset_0_count_100.tar.gz` and prints the
+The command writes `exports/protocol_offset_0_count_100_r8.tar.gz` and prints the
 archive SHA-256. Download that single file from the instance. It contains no
 `.env` file or API key. On another checkout, upload the archive and restore the
 same shard directory before resuming the same command:
 
 ```bash
 mkdir -p incoming
-# Upload protocol_offset_0_count_100.tar.gz into incoming/ using the platform UI or scp.
-bash mapd.sh protocol-restore incoming/protocol_offset_0_count_100.tar.gz
+# Upload protocol_offset_0_count_100_r8.tar.gz into incoming/ using the platform UI or scp.
+bash mapd.sh protocol-restore incoming/protocol_offset_0_count_100_r8.tar.gz
 bash mapd.sh protocol-start 0 100
 ```
 
@@ -373,7 +375,11 @@ bash mapd.sh protocol-train-logs
 ```
 
 The command first performs two real Qwen rollouts per example against the
-wiki-18 HTTP retriever. Rollouts are checkpointed after every example and are
+wiki-18 HTTP retriever. Every accepted trajectory must begin with a model
+`search` action, contain an environment-owned `information` observation, and
+end with one model `answer` action. Model-generated `information`, multiple
+actions in one response, invalid actions, and answer-only trajectories fail the
+run instead of being counted as retrieval. Rollouts are checkpointed after every example and are
 reused when the command is restarted with the same model and settings. It then
 loads the train model once and runs one single-device update per usable
 example. Quality-gate-passed protocols supply protocol PI. Rejected protocols
@@ -386,10 +392,10 @@ layer and is not the paper's distributed 8-GPU run. Success ends with
 with:
 
 ```bash
-cat artifacts/protocol_train_smoke/offset_0_count_20/manifest.json
-cat artifacts/protocol_train_smoke/offset_0_count_20/steps.json
+cat artifacts/protocol_train_smoke/offset_0_count_20_r8_action_v2/manifest.json
+cat artifacts/protocol_train_smoke/offset_0_count_20_r8_action_v2/steps.json
 ```
 
 The final checkpoint is written to
-`artifacts/protocol_train_smoke/offset_0_count_20/checkpoint-final/checkpoint.pt`
+`artifacts/protocol_train_smoke/offset_0_count_20_r8_action_v2/checkpoint-final/checkpoint.pt`
 and is reloaded before the command reports success.

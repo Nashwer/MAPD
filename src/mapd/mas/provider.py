@@ -21,23 +21,30 @@ class TeacherClient(Protocol):
 
 ROLE_INSTRUCTIONS = {
     "orchestrator": (
-        "Classify and decompose into dependency-aware subtasks with id, objective, and depends_on. "
-        "Do not reveal the answer. Return JSON only."
+        "Classify and decompose the question into dependency-aware subtasks. "
+        "Use task_type=single_hop for one direct fact, multi_hop for linked facts, comparison for "
+        "explicit comparisons, and others only when none applies. Do not reveal the answer. "
+        "Return exactly {\"task_type\":\"single_hop|multi_hop|comparison|others\","
+        "\"subtasks\":[{\"id\":\"s1\",\"objective\":\"...\",\"depends_on\":[]}]}."
     ),
     "searcher": (
         "Produce up to max_queries retrieval queries for the objective. Do not include an oracle answer. "
-        "Return JSON with queries."
+        "Return exactly {\"queries\":[\"query\"]}; queries must be a non-empty string array."
     ),
     "search_summarizer": (
-        "Compress passages into a supported finding and passage evidence_ids. Return JSON only."
+        "Compress the retrieved passages into one concise, non-empty supported finding. Cite only ids "
+        "present in passages. Return exactly {\"summary\":\"...\",\"evidence_ids\":[\"id\"]}. "
+        "If passages is non-empty, evidence_ids must be non-empty."
     ),
     "answerer": (
         "Infer the shortest answer strictly from findings and passages. You do not receive ground truth. "
-        "Use null when evidence is insufficient."
+        "Use null when evidence is insufficient. Return exactly {\"answer\":\"short answer\"} or "
+        "{\"answer\":null}."
     ),
     "repair": (
-        "Use ground truth only to diagnose expression versus search failure. Return failure_type, diagnosis, "
-        "and dependency-aware subtasks without putting the answer in objectives or queries."
+        "Use ground truth only to diagnose expression versus search failure. Do not put the answer in "
+        "objectives. Return exactly {\"failure_type\":\"expression|search\",\"diagnosis\":\"...\","
+        "\"subtasks\":[{\"id\":\"s1\",\"objective\":\"...\",\"depends_on\":[]}]}."
     ),
     "protocolizer": (
         "Convert the exploration log into the paper's Structured JSON Protocol. Output the protocol "
@@ -92,6 +99,140 @@ def _decode_json_object(content: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise TypeError("teacher response JSON must be an object")
     return value
+
+
+_TASK_TYPES = {"single_hop", "multi_hop", "comparison", "others"}
+
+
+def _validate_role_response(
+    role: str, value: dict[str, Any], payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Validate the JSON contract before role code can silently default fields."""
+
+    if role == "orchestrator":
+        _require_exact_fields(role, value, {"task_type", "subtasks"})
+        if value["task_type"] not in _TASK_TYPES:
+            raise TypeError(f"orchestrator task_type must be one of {sorted(_TASK_TYPES)}")
+        _validate_subtasks(value["subtasks"], int(payload.get("max_subquestions") or 0))
+    elif role == "searcher":
+        _require_exact_fields(role, value, {"queries"})
+        queries = _require_string_list(role, "queries", value["queries"], allow_empty=False)
+        maximum = int(payload.get("max_queries") or len(queries))
+        if len(queries) > maximum:
+            raise TypeError(f"searcher queries exceeds max_queries={maximum}")
+    elif role == "search_summarizer":
+        _require_exact_fields(role, value, {"summary", "evidence_ids"})
+        _require_non_empty_string(role, "summary", value["summary"])
+        evidence_ids = _require_string_list(
+            role, "evidence_ids", value["evidence_ids"], allow_empty=True
+        )
+        passages = payload.get("passages")
+        if not isinstance(passages, list):
+            raise TypeError("search_summarizer input passages must be an array")
+        allowed_ids = {
+            str(item.get("id")) for item in passages if isinstance(item, dict) and item.get("id") is not None
+        }
+        unknown = sorted(set(evidence_ids) - allowed_ids)
+        if unknown:
+            raise TypeError(f"search_summarizer cited unknown evidence_ids: {unknown}")
+        if passages and not evidence_ids:
+            raise TypeError("search_summarizer must cite evidence when passages are available")
+    elif role == "answerer":
+        _require_exact_fields(role, value, {"answer"})
+        if value["answer"] is not None:
+            _require_non_empty_string(role, "answer", value["answer"])
+    elif role == "repair":
+        _require_exact_fields(role, value, {"failure_type", "diagnosis", "subtasks"})
+        if value["failure_type"] not in {"expression", "search"}:
+            raise TypeError("repair failure_type must be expression or search")
+        _require_non_empty_string(role, "diagnosis", value["diagnosis"])
+        _validate_subtasks(value["subtasks"], int(payload.get("max_subquestions") or 0))
+    elif role == "protocolizer":
+        _validate_protocolizer_response(value, payload)
+    else:
+        raise TypeError(f"unsupported teacher role: {role}")
+    return value
+
+
+def _require_exact_fields(role: str, value: dict[str, Any], expected: set[str]) -> None:
+    actual = set(value)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        raise TypeError(f"{role} response fields mismatch: missing={missing}, extra={extra}")
+
+
+def _require_non_empty_string(role: str, field: str, value: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise TypeError(f"{role} {field} must be a non-empty string")
+    return value
+
+
+def _require_string_list(
+    role: str, field: str, value: Any, *, allow_empty: bool
+) -> list[str]:
+    if not isinstance(value, list):
+        raise TypeError(f"{role} {field} must be an array")
+    if not allow_empty and not value:
+        raise TypeError(f"{role} {field} must be non-empty")
+    if any(not isinstance(item, str) or not item.strip() for item in value):
+        raise TypeError(f"{role} {field} must contain only non-empty strings")
+    return value
+
+
+def _validate_subtasks(value: Any, maximum: int) -> None:
+    if not isinstance(value, list):
+        raise TypeError("subtasks must be an array")
+    if maximum and len(value) > maximum:
+        raise TypeError(f"subtasks exceeds max_subquestions={maximum}")
+    ids: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise TypeError("each subtask must be an object")
+        _require_exact_fields("subtask", item, {"id", "objective", "depends_on"})
+        ids.append(_require_non_empty_string("subtask", "id", item["id"]))
+        _require_non_empty_string("subtask", "objective", item["objective"])
+        _require_string_list("subtask", "depends_on", item["depends_on"], allow_empty=True)
+    if len(ids) != len(set(ids)):
+        raise TypeError("subtask ids must be unique")
+    known = set(ids)
+    for item in value:
+        unknown = sorted(set(item["depends_on"]) - known)
+        if unknown:
+            raise TypeError(f"subtask depends_on contains unknown ids: {unknown}")
+        if item["id"] in item["depends_on"]:
+            raise TypeError("subtask cannot depend on itself")
+
+
+def _validate_protocolizer_response(value: dict[str, Any], payload: dict[str, Any]) -> None:
+    success = payload.get("success") is True
+    common = {"task_type", "reasoning_plan", "grounding_facts", "answer_grounded"}
+    expected = common | ({"answer"} if success else {"partial_findings"})
+    _require_exact_fields("protocolizer", value, expected)
+    if value["task_type"] != payload.get("task_type"):
+        raise TypeError("protocolizer task_type must exactly match the exploration")
+    _require_string_list(
+        "protocolizer", "reasoning_plan", value["reasoning_plan"], allow_empty=False
+    )
+    facts = _require_string_list(
+        "protocolizer", "grounding_facts", value["grounding_facts"], allow_empty=False
+    )
+    if type(value["answer_grounded"]) is not bool or value["answer_grounded"] is not success:
+        raise TypeError("protocolizer answer_grounded must exactly match exploration success")
+    if success:
+        _require_non_empty_string("protocolizer", "answer", value["answer"])
+        if value["answer"] != payload.get("candidate_answer"):
+            raise TypeError("protocolizer answer must exactly match candidate_answer")
+    else:
+        _require_non_empty_string("protocolizer", "partial_findings", value["partial_findings"])
+    passages = payload.get("passages")
+    if not isinstance(passages, list):
+        raise TypeError("protocolizer input passages must be an array")
+    passage_texts = [
+        str(item.get("contents") or "") for item in passages if isinstance(item, dict)
+    ]
+    if any(not any(fact in passage for passage in passage_texts) for fact in facts):
+        raise TypeError("protocolizer grounding_facts must be verbatim passage substrings")
 
 
 class MockTeacher:
@@ -183,9 +324,14 @@ class OpenAICompatibleTeacher:
         self._completion_tokens = 0
         self._request_count = 0
         self._estimated_cost_usd = 0.0
+        self._run_prompt_tokens = 0
+        self._run_completion_tokens = 0
+        self._run_request_count = 0
+        self._run_estimated_cost_usd = 0.0
         self._load_existing_usage(
-            self.budget_ledger_path or self.usage_log_path
+            self.budget_ledger_path or self.usage_log_path, cumulative=True
         )
+        self._load_existing_usage(self.usage_log_path, cumulative=False)
 
     def generate_json(self, role: str, payload: dict[str, Any]) -> dict[str, Any]:
         # A configured budget serializes teacher calls so parallel searchers
@@ -229,6 +375,8 @@ class OpenAICompatibleTeacher:
             body["thinking"] = {"type": "enabled"}
             body["reasoning_effort"] = self.thinking_mode
         error: Exception | None = None
+        last_decoded: dict[str, Any] | None = None
+        base_system_prompt = body["messages"][0]["content"]
         for attempt in range(self.max_retries + 1):
             try:
                 response = httpx.post(
@@ -249,7 +397,9 @@ class OpenAICompatibleTeacher:
                         f"max_tokens={body.get('max_tokens')}); increase the output "
                         "limit or constrain the role response"
                     )
-                return _decode_json_object(content)
+                decoded = _decode_json_object(content)
+                last_decoded = decoded
+                return _validate_role_response(role, decoded, payload)
             except httpx.HTTPStatusError as exc:
                 error = RuntimeError(
                     _http_error_message(
@@ -267,18 +417,39 @@ class OpenAICompatibleTeacher:
                     time.sleep(min(2**attempt, 8))
             except (httpx.HTTPError, KeyError, TypeError, json.JSONDecodeError) as exc:
                 error = exc
+                if (
+                    role == "protocolizer"
+                    and attempt == self.max_retries
+                    and last_decoded is not None
+                ):
+                    # Protocol schema failures belong to the paper's quality
+                    # gate. Preserve the last parseable object so one bad
+                    # sample is rejected and checkpointed instead of stopping
+                    # the entire resumable shard.
+                    return last_decoded
                 if attempt < self.max_retries:
+                    correction = str(exc).replace("\n", " ")[:500]
+                    body["messages"][0]["content"] = (
+                        base_system_prompt
+                        + " Your previous response violated this contract: "
+                        + correction
+                        + ". Return a corrected JSON object only."
+                    )
                     time.sleep(min(2**attempt, 8))
         raise RuntimeError(f"Teacher request failed after retries: {error}") from error
 
     def usage_summary(self) -> dict[str, int | float | None]:
         with self._usage_lock:
             return {
-                "requests": self._request_count,
-                "prompt_tokens": self._prompt_tokens,
-                "completion_tokens": self._completion_tokens,
-                "estimated_cost_usd": round(self._estimated_cost_usd, 8),
+                "requests": self._run_request_count,
+                "prompt_tokens": self._run_prompt_tokens,
+                "completion_tokens": self._run_completion_tokens,
+                "estimated_cost_usd": round(self._run_estimated_cost_usd, 8),
                 "budget_usd": self.budget_usd,
+                "cumulative_requests": self._request_count,
+                "cumulative_prompt_tokens": self._prompt_tokens,
+                "cumulative_completion_tokens": self._completion_tokens,
+                "cumulative_estimated_cost_usd": round(self._estimated_cost_usd, 8),
             }
 
     def _check_budget(self) -> None:
@@ -307,6 +478,10 @@ class OpenAICompatibleTeacher:
             self._prompt_tokens += prompt_tokens
             self._completion_tokens += completion_tokens
             self._estimated_cost_usd += cost
+            self._run_request_count += 1
+            self._run_prompt_tokens += prompt_tokens
+            self._run_completion_tokens += completion_tokens
+            self._run_estimated_cost_usd += cost
             cumulative = self._estimated_cost_usd
             record = {
                 "time": datetime.now(timezone.utc).isoformat(),
@@ -337,7 +512,7 @@ class OpenAICompatibleTeacher:
             prompt_tokens * input_price + completion_tokens * output_price
         ) / 1_000_000
 
-    def _load_existing_usage(self, path: Path | None) -> None:
+    def _load_existing_usage(self, path: Path | None, *, cumulative: bool) -> None:
         if path is None or not path.is_file():
             return
         with path.open("r", encoding="utf-8") as handle:
@@ -346,9 +521,18 @@ class OpenAICompatibleTeacher:
                     continue
                 try:
                     record = json.loads(line)
-                    self._request_count += 1
-                    self._prompt_tokens += int(record.get("prompt_tokens") or 0)
-                    self._completion_tokens += int(record.get("completion_tokens") or 0)
-                    self._estimated_cost_usd += float(record.get("estimated_cost_usd") or 0)
+                    prompt_tokens = int(record.get("prompt_tokens") or 0)
+                    completion_tokens = int(record.get("completion_tokens") or 0)
+                    cost = float(record.get("estimated_cost_usd") or 0)
+                    if cumulative:
+                        self._request_count += 1
+                        self._prompt_tokens += prompt_tokens
+                        self._completion_tokens += completion_tokens
+                        self._estimated_cost_usd += cost
+                    else:
+                        self._run_request_count += 1
+                        self._run_prompt_tokens += prompt_tokens
+                        self._run_completion_tokens += completion_tokens
+                        self._run_estimated_cost_usd += cost
                 except (json.JSONDecodeError, TypeError, ValueError):
                     continue

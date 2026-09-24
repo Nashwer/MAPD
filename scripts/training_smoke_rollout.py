@@ -51,6 +51,7 @@ def main() -> int:
         top_k=1,
         max_turns=2,
         system_prompt=required_search_prompt,
+        require_search=True,
     )
     trajectories = [
         environment.rollout(
@@ -61,6 +62,12 @@ def main() -> int:
         for _ in range(args.group_size)
     ]
     for trajectory in trajectories:
+        if not trajectory.turns or trajectory.turns[0].action != "search":
+            raise RuntimeError("training acceptance rollout did not begin with a real search action")
+        if any(turn.action == "invalid" for turn in trajectory.turns):
+            raise RuntimeError("training acceptance rollout contains an invalid action")
+        if any("<information>" in turn.model_output.lower() for turn in trajectory.turns):
+            raise RuntimeError("model attempted to generate the environment information block")
         for turn in trajectory.turns:
             if turn.token_ids is None or turn.token_log_probs is None:
                 raise RuntimeError("vLLM did not return exact token ids and selected-token log-probabilities")

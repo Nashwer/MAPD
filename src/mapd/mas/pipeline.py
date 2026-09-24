@@ -47,7 +47,7 @@ class MASPipeline:
             if proposed_type is not None:
                 task_type = proposed_type
             if not proposed and round_index == 1:
-                proposed = [SubTask(id="round-1-s1", objective=sample.question, round_index=1)]
+                raise ValueError("orchestrator returned no subtask for the initial search round")
             if not proposed:
                 break
             new_searches, new_findings = self._execute_dependency_graph(proposed, findings, sample.answers)

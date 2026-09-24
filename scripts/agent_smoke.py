@@ -43,6 +43,7 @@ def main() -> int:
         top_k=1,
         max_turns=3,
         system_prompt=required_search_prompt,
+        require_search=True,
     )
     sample = QASample(
         id="agent-smoke-1",
@@ -72,6 +73,13 @@ def main() -> int:
     print("============================")
 
     searched = any(turn.action == "search" for turn in trajectory.turns)
+    malformed = any(
+        turn.action == "invalid" or "<information>" in turn.model_output.lower()
+        for turn in trajectory.turns
+    )
+    if malformed:
+        print("AGENT SMOKE FAILED: malformed or model-generated environment action", file=sys.stderr)
+        return 3
     if not searched:
         print("AGENT SMOKE FAILED: the model did not call search", file=sys.stderr)
         return 3

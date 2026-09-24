@@ -18,7 +18,7 @@ from mapd.mas.schema import SynthesisArtifact
 from mapd.retrieval.retriever_server import HTTPRetriever
 
 
-RUN_SCHEMA = "mapd-protocol-train-rollout-v1"
+RUN_SCHEMA = "mapd-protocol-train-rollout-v2"
 
 
 def parse_args() -> argparse.Namespace:
@@ -77,6 +77,7 @@ def main() -> int:
             top_k=args.top_k,
             max_turns=args.max_turns,
             system_prompt=prompt,
+            require_search=True,
         )
 
     for artifact in pending:
@@ -123,6 +124,11 @@ def main() -> int:
                 "mixed_reward_groups": sum(
                     len({item.reward for item in group}) > 1 for group in completed.values()
                 ),
+                "verified_tool_trajectories": sum(
+                    _is_verified_tool_trajectory(item)
+                    for group in completed.values()
+                    for item in group
+                ),
                 "output": str(rollout_path.resolve()),
             },
             ensure_ascii=False,
@@ -145,6 +151,7 @@ def _run_config(args: argparse.Namespace) -> dict[str, Any]:
         "top_k": args.top_k,
         "max_turns": args.max_turns,
         "max_new_tokens": args.max_new_tokens,
+        "require_search": True,
     }
 
 
@@ -181,9 +188,31 @@ def _validate_group(
     for trajectory in trajectories:
         if trajectory.example_id != example_id:
             raise ValueError("rollout group contains multiple example ids")
+        if not _is_verified_tool_trajectory(trajectory):
+            raise RuntimeError(
+                f"example {example_id!r} did not produce a strict search-observation-answer trajectory"
+            )
         for turn in trajectory.turns:
             if turn.token_ids is None or turn.token_log_probs is None:
                 raise RuntimeError("vLLM did not return exact rollout token metadata")
+
+
+def _is_verified_tool_trajectory(trajectory: AgentTrajectory) -> bool:
+    if not trajectory.terminated or trajectory.final_answer is None or not trajectory.turns:
+        return False
+    if trajectory.turns[0].action != "search":
+        return False
+    if trajectory.turns[-1].action != "answer":
+        return False
+    if any(turn.action == "invalid" for turn in trajectory.turns):
+        return False
+    if any("<information>" in turn.model_output.lower() for turn in trajectory.turns):
+        return False
+    search_turns = [turn for turn in trajectory.turns if turn.action == "search"]
+    return bool(search_turns) and all(
+        turn.query and turn.observation and turn.observation.startswith("<information>")
+        for turn in search_turns
+    )
 
 
 def _write_manifest(
@@ -199,6 +228,17 @@ def _write_manifest(
         "completed_examples": len(completed),
         "completed_ids": [item.sample.id for item in artifacts if item.sample.id in completed],
         "trajectory_count": sum(len(group) for group in completed.values()),
+        "verified_tool_trajectories": sum(
+            _is_verified_tool_trajectory(trajectory)
+            for group in completed.values()
+            for trajectory in group
+        ),
+        "search_turns": sum(
+            turn.action == "search"
+            for group in completed.values()
+            for trajectory in group
+            for turn in trajectory.turns
+        ),
         "rewards": {
             item.sample.id: [trajectory.reward for trajectory in completed[item.sample.id]]
             for item in artifacts

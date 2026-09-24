@@ -6,6 +6,7 @@ import math
 import os
 import platform
 import sys
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -31,8 +32,8 @@ from mapd.trainer.opsd import select_privileged_information
 
 
 app = typer.Typer(no_args_is_help=True, help="MAPD reproduction utilities")
-ARTIFACT_SCHEMA_VERSION = 2
-SYNTHESIS_REVISION = 7
+ARTIFACT_SCHEMA_VERSION = 3
+SYNTHESIS_REVISION = 8
 
 
 def _build_teacher(
@@ -156,6 +157,30 @@ def _run_synthesis(config: AppConfig, samples: list[QASample], output_dir: Path)
     manifest = {
         "count": len(artifacts),
         "passed": sum(artifact.quality.passed for artifact in artifacts),
+        "exploration_success": sum(artifact.exploration.success for artifact in artifacts),
+        "succeeded_protocols": sum(
+            artifact.protocol is not None and artifact.protocol.answer_grounded
+            for artifact in artifacts
+        ),
+        "evidence_protocols": sum(
+            artifact.protocol is not None and not artifact.protocol.answer_grounded
+            for artifact in artifacts
+        ),
+        "task_types": dict(
+            sorted(Counter(artifact.exploration.task_type.value for artifact in artifacts).items())
+        ),
+        "searches": sum(len(artifact.exploration.searches) for artifact in artifacts),
+        "retrieved_passages": sum(
+            len(search.passages)
+            for artifact in artifacts
+            for search in artifact.exploration.searches
+        ),
+        "findings": sum(len(artifact.exploration.findings) for artifact in artifacts),
+        "nonempty_findings": sum(
+            bool(finding.summary.strip())
+            for artifact in artifacts
+            for finding in artifact.exploration.findings
+        ),
         "cache_hits": cache_hits,
         "seed": config.run.seed,
         "config_hash": config_hash,

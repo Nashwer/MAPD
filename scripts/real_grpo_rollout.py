@@ -55,6 +55,7 @@ def main() -> int:
         top_k=args.top_k,
         max_turns=args.max_turns,
         system_prompt=prompt,
+        require_search=True,
     )
 
     diagnostics = []
@@ -69,10 +70,23 @@ def main() -> int:
         ]
         rewards = [item.reward for item in trajectories]
         searches = [any(turn.action == "search" for turn in item.turns) for item in trajectories]
+        strict_actions = [
+            bool(item.turns)
+            and item.turns[0].action == "search"
+            and item.terminated
+            and all(turn.action != "invalid" for turn in item.turns)
+            and all("<information>" not in turn.model_output.lower() for turn in item.turns)
+            for item in trajectories
+        ]
         diagnostics.append(
-            {"id": sample.id, "rewards": rewards, "searched": searches}
+            {
+                "id": sample.id,
+                "rewards": rewards,
+                "searched": searches,
+                "strict_actions": strict_actions,
+            }
         )
-        if len(set(rewards)) < 2:
+        if len(set(rewards)) < 2 or not all(searches) or not all(strict_actions):
             continue
         for trajectory in trajectories:
             for turn in trajectory.turns:

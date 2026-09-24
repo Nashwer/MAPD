@@ -32,17 +32,17 @@ class Searcher:
             },
         )
         query_value = result.get("queries", [])
-        if isinstance(query_value, str):
-            query_value = [query_value]
         if not isinstance(query_value, list):
-            query_value = []
-        raw_queries = [str(item).strip() for item in query_value] or [subtask.objective]
+            raise TypeError("searcher queries must be a JSON array")
+        raw_queries = [str(item).strip() for item in query_value]
         queries, seen = [], set()
         for query in raw_queries[: self.max_queries]:
             key = normalize_answer(query)
             if key and key not in seen and not contains_answer(query, forbidden_answers):
                 queries.append(query)
                 seen.add(key)
+        if not queries:
+            raise ValueError("searcher produced no usable query after leak filtering")
 
         searches = [
             SearchRecord(subtask_id=subtask.id, query=query, passages=self.retriever.search(query, self.top_k))
@@ -57,12 +57,21 @@ class Searcher:
             {"subtask": subtask.model_dump(mode="json"), "passages": list(unique_passages.values())},
         )
         evidence_value = summary.get("evidence_ids", [])
-        if isinstance(evidence_value, str):
-            evidence_value = [evidence_value]
         if not isinstance(evidence_value, list):
-            evidence_value = []
+            raise TypeError("search_summarizer evidence_ids must be a JSON array")
+        summary_text = str(summary.get("summary", "")).strip()
+        if not summary_text:
+            raise ValueError("search_summarizer returned an empty summary")
+        evidence_ids = [str(item) for item in evidence_value]
+        unknown_ids = sorted(set(evidence_ids) - set(unique_passages))
+        if unknown_ids:
+            raise ValueError(
+                "search_summarizer returned unknown evidence ids: " + ", ".join(unknown_ids)
+            )
+        if unique_passages and not evidence_ids:
+            raise ValueError("search_summarizer must cite at least one retrieved passage")
         return searches, SearchFinding(
             subtask_id=subtask.id,
-            summary=str(summary.get("summary", "")),
-            evidence_ids=[str(item) for item in evidence_value],
+            summary=summary_text,
+            evidence_ids=evidence_ids,
         )

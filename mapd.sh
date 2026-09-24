@@ -14,6 +14,7 @@ export HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
 export HF_HOME=${HF_HOME:-"$HOME/cache/huggingface"}
 export HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT:-1200}
 export HF_HUB_ETAG_TIMEOUT=${HF_HUB_ETAG_TIMEOUT:-60}
+PROTOCOL_SYNTHESIS_REVISION=8
 if [[ -f "$PROJECT_ROOT/scripts/bootstrap_versions.env" ]]; then
   # shellcheck source=scripts/bootstrap_versions.env
   source "$PROJECT_ROOT/scripts/bootstrap_versions.env"
@@ -141,7 +142,7 @@ case ${1:-} in
     "$VERL_VENV/bin/python" scripts/generate_protocol.py \
       --config configs/paper_like.yaml \
       --input data/training/mapd_train_25600.jsonl \
-      --output artifacts/protocol_smoke \
+      --output "artifacts/protocol_smoke_r${PROTOCOL_SYNTHESIS_REVISION}" \
       --limit "${2:-20}" \
       --progress-every 1
     ;;
@@ -153,7 +154,7 @@ case ${1:-} in
       echo "OFFSET must be nonnegative and COUNT must be positive" >&2
       exit 2
     }
-    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}"
+    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}"
     "$VERL_VENV/bin/python" scripts/generate_protocol.py \
       --config configs/paper_like.yaml \
       --input data/training/mapd_train_25600.jsonl \
@@ -185,10 +186,10 @@ case ${1:-} in
       echo "OFFSET must be nonnegative and COUNT must be positive" >&2
       exit 2
     }
-    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}"
+    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}"
     "$VERL_VENV/bin/python" scripts/protocol_bundle.py export \
       --source "$SHARD_DIR" \
-      --output "$PROJECT_ROOT/exports/protocol_offset_${OFFSET}_count_${COUNT}.tar.gz" \
+      --output "$PROJECT_ROOT/exports/protocol_offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}.tar.gz" \
       --project-root "$PROJECT_ROOT" \
       --offset "$OFFSET" \
       --count "$COUNT"
@@ -215,7 +216,7 @@ case ${1:-} in
       echo "OFFSET must be nonnegative and COUNT must be positive" >&2
       exit 2
     }
-    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}"
+    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}"
     [[ -s "$SHARD_DIR/artifacts.jsonl" ]] || {
       echo "protocol shard not found: $SHARD_DIR/artifacts.jsonl" >&2
       exit 1
@@ -224,7 +225,7 @@ case ${1:-} in
       echo "retriever is not healthy; run: bash mapd.sh retrieval-start" >&2
       exit 1
     fi
-    OUTPUT_DIR="$PROJECT_ROOT/artifacts/protocol_train_smoke/offset_${OFFSET}_count_${COUNT}"
+    OUTPUT_DIR="$PROJECT_ROOT/artifacts/protocol_train_smoke/offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}_action_v2"
     "$VERL_VENV/bin/python" scripts/protocol_train_smoke_rollout.py \
       --model "$MODEL_PATH" \
       --artifacts "$SHARD_DIR/artifacts.jsonl" \

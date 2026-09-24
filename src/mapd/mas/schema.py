@@ -24,7 +24,7 @@ class SearchRecord(BaseModel):
 
 class SearchFinding(BaseModel):
     subtask_id: str
-    summary: str
+    summary: str = Field(min_length=1)
     evidence_ids: list[str] = Field(default_factory=list)
 
 
@@ -56,4 +56,3 @@ class SynthesisArtifact(BaseModel):
     raw_protocol: dict[str, Any] = Field(default_factory=dict)
     quality: QualityReport
     metadata: dict[str, Any] = Field(default_factory=dict)
-

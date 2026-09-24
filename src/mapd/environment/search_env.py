@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from mapd.data.schema import QASample
-from mapd.environment.parser import parse_action
+from mapd.environment.parser import ParsedAction, parse_action
 from mapd.environment.schema import AgentTrajectory, AgentTurn
 from mapd.retrieval.base import Retriever
 from mapd.retrieval.schema import RetrievedPassage
@@ -14,8 +14,16 @@ from mapd.reward.exact_match import exact_match
 AGENT_SYSTEM_PROMPT = """Answer the question by reasoning and using the search tool when needed.
 Issue a query as <search>query</search>. The environment will return <information>...</information>.
 When ready, finish with <answer>short answer</answer>.
+Emit exactly one action per response and stop immediately after its closing tag.
+Never generate or imitate an <information> block; only the environment may provide it.
 The answer tag must contain only the minimal answer span, never an explanatory sentence.
 For example, use <answer>Paris</answer>, not <answer>The city is Paris.</answer>."""
+
+INVALID_ACTION_CORRECTION = (
+    "Your previous response was invalid. Emit exactly one complete "
+    "<search>query</search> or <answer>short answer</answer> action, then stop. "
+    "Never emit <information>; that tag belongs to the environment."
+)
 
 
 class StudentPolicy(Protocol):
@@ -44,11 +52,13 @@ class AgenticSearchEnvironment:
         top_k: int = 3,
         max_turns: int = 4,
         system_prompt: str = AGENT_SYSTEM_PROMPT,
+        require_search: bool = False,
     ):
         self.retriever = retriever
         self.top_k = top_k
         self.max_turns = max_turns
         self.system_prompt = system_prompt
+        self.require_search = require_search
 
     def rollout(
         self, sample: QASample, policy: StudentPolicy, *, max_new_tokens: int = 512
@@ -60,6 +70,7 @@ class AgenticSearchEnvironment:
         turns: list[AgentTurn] = []
         final_answer: str | None = None
         terminated = False
+        searched = False
         for turn_index in range(1, self.max_turns + 1):
             output = policy.generate(messages, max_new_tokens)
             token_ids = getattr(policy, "last_token_ids", None)
@@ -71,6 +82,8 @@ class AgenticSearchEnvironment:
                 ),
             }
             action = parse_action(output)
+            if action.kind == "answer" and self.require_search and not searched:
+                action = ParsedAction("invalid")
             if action.kind == "answer":
                 final_answer = action.value
                 terminated = True
@@ -87,6 +100,7 @@ class AgenticSearchEnvironment:
             if action.kind == "search":
                 query = action.value or ""
                 observation = format_observation(self.retriever.search(query, self.top_k) if query else [])
+                searched = True
                 turns.append(
                     AgentTurn(
                         turn_index=turn_index,
@@ -115,7 +129,7 @@ class AgenticSearchEnvironment:
             messages.extend(
                 [
                     {"role": "assistant", "content": output},
-                    {"role": "user", "content": "Use one <search> or <answer> action."},
+                    {"role": "user", "content": INVALID_ACTION_CORRECTION},
                 ]
             )
         return AgentTrajectory(

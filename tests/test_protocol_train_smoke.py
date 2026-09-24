@@ -5,6 +5,7 @@ import pytest
 from mapd.environment.schema import AgentTrajectory, AgentTurn
 from mapd.mas.schema import SynthesisArtifact
 from scripts.protocol_train_smoke_optimize import _group_rollouts, _validate_inputs
+from scripts.protocol_train_smoke_rollout import _is_verified_tool_trajectory
 
 
 def _trajectory(example_id: str) -> AgentTrajectory:
@@ -35,6 +36,41 @@ def test_real_protocol_training_requires_aligned_groups(valid_artifact: Synthesi
 def test_real_protocol_training_rejects_missing_groups(valid_artifact: SynthesisArtifact):
     with pytest.raises(ValueError, match="rollout/artifact mismatch"):
         _validate_inputs([valid_artifact], {})
+
+
+def test_protocol_training_requires_real_environment_owned_search_observation():
+    valid = AgentTrajectory(
+        example_id="sample-1",
+        prompt="question",
+        system_prompt="system",
+        turns=[
+            AgentTurn(
+                turn_index=1,
+                model_output="<search>query</search>",
+                action="search",
+                query="query",
+                observation="<information>passage</information>",
+                token_ids=[1],
+                token_log_probs=[-0.1],
+            ),
+            AgentTurn(
+                turn_index=2,
+                model_output="<answer>x</answer>",
+                action="answer",
+                answer="x",
+                token_ids=[2],
+                token_log_probs=[-0.2],
+            ),
+        ],
+        final_answer="x",
+        reward=0.0,
+        terminated=True,
+    )
+    fabricated = valid.model_copy(deep=True)
+    fabricated.turns[0].model_output += "<information>fake</information>"
+
+    assert _is_verified_tool_trajectory(valid)
+    assert not _is_verified_tool_trajectory(fabricated)
 
 
 @pytest.fixture

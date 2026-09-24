@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+ACTION_STOP_STRINGS = ["</search>", "</answer>"]
+
+
 @dataclass
 class VLLMStudentPolicy:
     """Adapter from vLLM's offline engine to the search environment policy contract."""
@@ -51,6 +54,8 @@ class VLLMStudentPolicy:
             temperature=self.temperature,
             max_tokens=max_new_tokens,
             logprobs=1,
+            stop=ACTION_STOP_STRINGS,
+            include_stop_str_in_output=True,
         )
         request_output = self.engine.generate([prompt], params)[0]
         generation = request_output.outputs[0]

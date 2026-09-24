@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+from collections import Counter
 from pathlib import Path
 
 from mapd.cli import _run_synthesis
@@ -37,7 +39,25 @@ def main() -> None:
         args.output,
     )
     passed = sum(artifact.quality.passed for artifact in artifacts)
-    print(f"generated={len(artifacts)} passed={passed} output={args.output}")
+    task_types = Counter(artifact.exploration.task_type.value for artifact in artifacts)
+    exploration_success = sum(artifact.exploration.success for artifact in artifacts)
+    findings = [
+        finding for artifact in artifacts for finding in artifact.exploration.findings
+    ]
+    summary = {
+        "generated": len(artifacts),
+        "quality_passed": passed,
+        "exploration_success": exploration_success,
+        "task_types": dict(sorted(task_types.items())),
+        "findings": len(findings),
+        "nonempty_findings": sum(bool(finding.summary.strip()) for finding in findings),
+        "output": str(args.output),
+    }
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if artifacts and len(task_types) == 1 and task_types.get("others") == len(artifacts):
+        raise RuntimeError(
+            "MAS classified every sample as others; inspect the orchestrator contract before training"
+        )
 
 
 if __name__ == "__main__":
