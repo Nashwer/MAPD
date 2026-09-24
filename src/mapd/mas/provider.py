@@ -46,6 +46,25 @@ ROLE_INSTRUCTIONS = {
 }
 
 
+_RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429}
+_JSON_RESPONSE_INSTRUCTION = "Return a valid JSON object only."
+
+
+def _http_error_message(
+    error: httpx.HTTPStatusError, *, role: str, request_bytes: int
+) -> str:
+    """Return useful request diagnostics without echoing prompts or credentials."""
+    response_body = error.response.text.strip()
+    if len(response_body) > 2_000:
+        response_body = response_body[:2_000] + "... [truncated]"
+    if not response_body:
+        response_body = "<empty response>"
+    return (
+        f"teacher request role={role} request_bytes={request_bytes} failed with "
+        f"HTTP {error.response.status_code}: {response_body}"
+    )
+
+
 def _decode_json_object(content: Any) -> dict[str, Any]:
     if isinstance(content, dict):
         return content
@@ -167,11 +186,18 @@ class OpenAICompatibleTeacher:
         if not api_key:
             raise RuntimeError(f"Missing API key environment variable: {self.api_key_env}")
         self._check_budget()
+        user_content = json.dumps(payload, ensure_ascii=False)
+        request_bytes = len(user_content.encode("utf-8"))
         body = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": ROLE_INSTRUCTIONS[role]},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                {
+                    "role": "system",
+                    "content": (
+                        f"{ROLE_INSTRUCTIONS[role]} {_JSON_RESPONSE_INSTRUCTION}"
+                    ),
+                },
+                {"role": "user", "content": user_content},
             ],
             "temperature": 0,
             "response_format": {"type": "json_object"},
@@ -197,6 +223,21 @@ class OpenAICompatibleTeacher:
                 content = response_payload["choices"][0]["message"]["content"]
                 self._record_usage(role, response_payload.get("usage"))
                 return _decode_json_object(content)
+            except httpx.HTTPStatusError as exc:
+                error = RuntimeError(
+                    _http_error_message(
+                        exc, role=role, request_bytes=request_bytes
+                    )
+                )
+                status_code = exc.response.status_code
+                retryable = (
+                    status_code in _RETRYABLE_HTTP_STATUS_CODES
+                    or status_code >= 500
+                )
+                if not retryable:
+                    break
+                if attempt < self.max_retries:
+                    time.sleep(min(2**attempt, 8))
             except (httpx.HTTPError, KeyError, TypeError, json.JSONDecodeError) as exc:
                 error = exc
                 if attempt < self.max_retries:
