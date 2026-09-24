@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
+from contextlib import nullcontext
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
@@ -113,17 +117,56 @@ class OpenAICompatibleTeacher:
         api_key_env: str,
         timeout_seconds: float,
         max_retries: int,
+        thinking_mode: str = "default",
+        max_output_tokens: int | None = None,
+        budget_usd: float | None = None,
+        input_price_per_million: float | None = None,
+        output_price_per_million: float | None = None,
+        usage_log_path: str | Path | None = None,
+        budget_ledger_path: str | Path | None = None,
     ):
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.api_key_env = api_key_env
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
+        self.thinking_mode = thinking_mode
+        self.max_output_tokens = max_output_tokens
+        self.budget_usd = budget_usd
+        self.input_price_per_million = input_price_per_million
+        self.output_price_per_million = output_price_per_million
+        self.usage_log_path = Path(usage_log_path) if usage_log_path else None
+        self.budget_ledger_path = (
+            Path(budget_ledger_path) if budget_ledger_path else None
+        )
+        self._usage_lock = threading.Lock()
+        self._budget_request_lock = threading.Lock()
+        self._prompt_tokens = 0
+        self._completion_tokens = 0
+        self._request_count = 0
+        self._estimated_cost_usd = 0.0
+        self._load_existing_usage(
+            self.budget_ledger_path or self.usage_log_path
+        )
 
     def generate_json(self, role: str, payload: dict[str, Any]) -> dict[str, Any]:
+        # A configured budget serializes teacher calls so parallel searchers
+        # cannot all pass the same pre-request budget check concurrently.
+        guard = (
+            self._budget_request_lock
+            if self.budget_usd is not None
+            else nullcontext()
+        )
+        with guard:
+            return self._generate_json_request(role, payload)
+
+    def _generate_json_request(
+        self, role: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
         api_key = os.getenv(self.api_key_env)
         if not api_key:
             raise RuntimeError(f"Missing API key environment variable: {self.api_key_env}")
+        self._check_budget()
         body = {
             "model": self.model,
             "messages": [
@@ -133,6 +176,13 @@ class OpenAICompatibleTeacher:
             "temperature": 0,
             "response_format": {"type": "json_object"},
         }
+        if self.max_output_tokens is not None:
+            body["max_tokens"] = self.max_output_tokens
+        if self.thinking_mode == "disabled":
+            body["thinking"] = {"type": "disabled"}
+        elif self.thinking_mode in {"low", "high", "max"}:
+            body["thinking"] = {"type": "enabled"}
+            body["reasoning_effort"] = self.thinking_mode
         error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
@@ -143,10 +193,94 @@ class OpenAICompatibleTeacher:
                     timeout=self.timeout_seconds,
                 )
                 response.raise_for_status()
-                content = response.json()["choices"][0]["message"]["content"]
+                response_payload = response.json()
+                content = response_payload["choices"][0]["message"]["content"]
+                self._record_usage(role, response_payload.get("usage"))
                 return _decode_json_object(content)
             except (httpx.HTTPError, KeyError, TypeError, json.JSONDecodeError) as exc:
                 error = exc
                 if attempt < self.max_retries:
                     time.sleep(min(2**attempt, 8))
         raise RuntimeError(f"Teacher request failed after retries: {error}") from error
+
+    def usage_summary(self) -> dict[str, int | float | None]:
+        with self._usage_lock:
+            return {
+                "requests": self._request_count,
+                "prompt_tokens": self._prompt_tokens,
+                "completion_tokens": self._completion_tokens,
+                "estimated_cost_usd": round(self._estimated_cost_usd, 8),
+                "budget_usd": self.budget_usd,
+            }
+
+    def _check_budget(self) -> None:
+        if self.budget_usd is None:
+            return
+        with self._usage_lock:
+            spent = self._estimated_cost_usd
+        if spent >= self.budget_usd:
+            raise RuntimeError(
+                f"teacher API budget reached: ${spent:.4f} >= ${self.budget_usd:.4f}; "
+                "completed artifacts and usage log are safe to resume"
+            )
+
+    def _record_usage(self, role: str, raw_usage: Any) -> None:
+        if not isinstance(raw_usage, dict):
+            if self.budget_usd is not None:
+                raise RuntimeError(
+                    "teacher response omitted token usage; stopping because a budget is configured"
+                )
+            return
+        prompt_tokens = int(raw_usage.get("prompt_tokens") or 0)
+        completion_tokens = int(raw_usage.get("completion_tokens") or 0)
+        cost = self._estimate_cost(prompt_tokens, completion_tokens)
+        with self._usage_lock:
+            self._request_count += 1
+            self._prompt_tokens += prompt_tokens
+            self._completion_tokens += completion_tokens
+            self._estimated_cost_usd += cost
+            cumulative = self._estimated_cost_usd
+            record = {
+                "time": datetime.now(timezone.utc).isoformat(),
+                "role": role,
+                "model": self.model,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "estimated_cost_usd": round(cost, 8),
+                "cumulative_cost_usd": round(cumulative, 8),
+            }
+            encoded = json.dumps(record, ensure_ascii=False) + "\n"
+            paths = {
+                path
+                for path in (self.usage_log_path, self.budget_ledger_path)
+                if path is not None
+            }
+            for path in paths:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(encoded)
+
+    def _estimate_cost(self, prompt_tokens: int, completion_tokens: int) -> float:
+        input_price = self.input_price_per_million or 0.0
+        output_price = self.output_price_per_million or 0.0
+        # Charge every input token at the cache-miss price. This deliberately
+        # overestimates DeepSeek automatic cache hits and keeps the guard safe.
+        return (
+            prompt_tokens * input_price + completion_tokens * output_price
+        ) / 1_000_000
+
+    def _load_existing_usage(self, path: Path | None) -> None:
+        if path is None or not path.is_file():
+            return
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                    self._request_count += 1
+                    self._prompt_tokens += int(record.get("prompt_tokens") or 0)
+                    self._completion_tokens += int(record.get("completion_tokens") or 0)
+                    self._estimated_cost_usd += float(record.get("estimated_cost_usd") or 0)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    continue

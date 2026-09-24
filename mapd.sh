@@ -2,6 +2,13 @@
 set -euo pipefail
 
 PROJECT_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+if [[ -f "$PROJECT_ROOT/.env" ]]; then
+  # .env is ignored by Git and treated as trusted shell configuration.
+  set -a
+  # shellcheck source=/dev/null
+  source "$PROJECT_ROOT/.env"
+  set +a
+fi
 export VERL_VENV=${VERL_VENV:-"$(dirname "$PROJECT_ROOT")/verl/.venv"}
 export HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
 export HF_HOME=${HF_HOME:-"$HOME/cache/huggingface"}
@@ -32,6 +39,12 @@ Commands:
   retrieval-start/status/logs/stop  Manage the command-line retrieval service
   retrieval-smoke  Check real top-3 retrieval against normalized QA examples
   grpo-smoke Run real rollouts until rewards vary, then perform one GRPO update
+  protocol-smoke  Generate a budget-capped real-teacher protocol sample
+  protocol-shard OFFSET COUNT  Generate one deterministic resumable shard
+  protocol-start/status/logs/stop  Manage a protocol shard background job
+  protocol-export OFFSET COUNT  Create a checksummed portable shard bundle
+  protocol-restore BUNDLE  Restore a bundle to its original artifact directory
+  protocol-merge BUNDLE...  Merge and de-duplicate exported protocol bundles
   model-smoke  Load the local Qwen model and run one GPU inference
   agent-smoke  Run one real Qwen -> BM25 search -> answer trajectory
   train-smoke  Run rollout, dual-context MAPD update, and checkpoint reload
@@ -120,6 +133,76 @@ case ${1:-} in
     "$VERL_VENV/bin/python" scripts/real_grpo_rollout.py \
       --model "$MODEL_PATH" --qa data/training/mapd_train_25600.jsonl
     "$VERL_VENV/bin/python" scripts/real_grpo_optimize.py --model "$MODEL_PATH"
+    ;;
+  protocol-smoke)
+    cd "$PROJECT_ROOT"
+    "$VERL_VENV/bin/python" scripts/generate_protocol.py \
+      --config configs/paper_like.yaml \
+      --input data/training/mapd_train_25600.jsonl \
+      --output artifacts/protocol_smoke \
+      --limit "${2:-20}" \
+      --progress-every 1
+    ;;
+  protocol-shard)
+    cd "$PROJECT_ROOT"
+    OFFSET=${2:-0}
+    COUNT=${3:-20}
+    [[ "$OFFSET" =~ ^[0-9]+$ && "$COUNT" =~ ^[1-9][0-9]*$ ]] || {
+      echo "OFFSET must be nonnegative and COUNT must be positive" >&2
+      exit 2
+    }
+    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}"
+    "$VERL_VENV/bin/python" scripts/generate_protocol.py \
+      --config configs/paper_like.yaml \
+      --input data/training/mapd_train_25600.jsonl \
+      --output "$SHARD_DIR" \
+      --offset "$OFFSET" \
+      --limit "$COUNT" \
+      --progress-every 1
+    ;;
+  protocol-start)
+    OFFSET=${2:-0}
+    COUNT=${3:-20}
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" start protocol-shard \
+      bash "$PROJECT_ROOT/mapd.sh" protocol-shard "$OFFSET" "$COUNT"
+    ;;
+  protocol-status)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" status protocol-shard
+    ;;
+  protocol-logs)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" logs protocol-shard 100
+    ;;
+  protocol-stop)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" stop protocol-shard
+    ;;
+  protocol-export)
+    cd "$PROJECT_ROOT"
+    OFFSET=${2:-0}
+    COUNT=${3:-20}
+    [[ "$OFFSET" =~ ^[0-9]+$ && "$COUNT" =~ ^[1-9][0-9]*$ ]] || {
+      echo "OFFSET must be nonnegative and COUNT must be positive" >&2
+      exit 2
+    }
+    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}"
+    "$VERL_VENV/bin/python" scripts/protocol_bundle.py export \
+      --source "$SHARD_DIR" \
+      --output "$PROJECT_ROOT/exports/protocol_offset_${OFFSET}_count_${COUNT}.tar.gz" \
+      --project-root "$PROJECT_ROOT" \
+      --offset "$OFFSET" \
+      --count "$COUNT"
+    ;;
+  protocol-restore)
+    cd "$PROJECT_ROOT"
+    [[ -n "${2:-}" ]] || { echo "BUNDLE is required" >&2; exit 2; }
+    "$VERL_VENV/bin/python" scripts/protocol_bundle.py restore \
+      --project-root "$PROJECT_ROOT" "$2"
+    ;;
+  protocol-merge)
+    cd "$PROJECT_ROOT"
+    shift
+    [[ "$#" -gt 0 ]] || { echo "at least one BUNDLE is required" >&2; exit 2; }
+    "$VERL_VENV/bin/python" scripts/protocol_bundle.py merge \
+      --output "$PROJECT_ROOT/artifacts/protocol_merged" "$@"
     ;;
   model-smoke)
     cd "$PROJECT_ROOT"

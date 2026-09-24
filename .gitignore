@@ -21,6 +21,7 @@ data/**
 !data/wiki18/index/
 !data/wiki18/index/.gitkeep
 outputs/
+exports/
 checkpoints/
 wandb/
 *.egg-info/

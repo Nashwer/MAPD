@@ -9,6 +9,14 @@ teacher:
   api_key_env: MAPD_TEACHER_API_KEY
   timeout_seconds: 120
   max_retries: 5
+  # DeepSeek defaults to high-effort thinking. Structured protocol roles use
+  # bounded non-thinking JSON to make cost and latency predictable.
+  thinking_mode: disabled
+  max_output_tokens: 2048
+  budget_usd: ${MAPD_TEACHER_BUDGET_USD:-5.0}
+  # Conservative DeepSeek Flash peak-hour cache-miss prices (USD / 1M tokens).
+  input_price_per_million: 0.30
+  output_price_per_million: 1.20
 retrieval:
   backend: http
   corpus_path: null

@@ -9,12 +9,14 @@ import yaml
 from pydantic import BaseModel, Field, model_validator
 
 
-_ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 
 def _expand_env(value: object) -> object:
     if isinstance(value, str):
-        return _ENV_PATTERN.sub(lambda match: os.getenv(match.group(1), ""), value)
+        return _ENV_PATTERN.sub(
+            lambda match: os.getenv(match.group(1), match.group(2) or ""), value
+        )
     if isinstance(value, list):
         return [_expand_env(item) for item in value]
     if isinstance(value, dict):
@@ -35,11 +37,21 @@ class TeacherConfig(BaseModel):
     api_key_env: str = "MAPD_TEACHER_API_KEY"
     timeout_seconds: float = Field(default=60, gt=0)
     max_retries: int = Field(default=3, ge=0)
+    thinking_mode: Literal["default", "disabled", "low", "high", "max"] = "default"
+    max_output_tokens: int | None = Field(default=None, ge=1)
+    budget_usd: float | None = Field(default=None, gt=0)
+    input_price_per_million: float | None = Field(default=None, ge=0)
+    output_price_per_million: float | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def validate_real_backend(self) -> "TeacherConfig":
         if self.backend == "openai_compatible" and (not self.base_url or not self.model):
             raise ValueError("openai_compatible teacher requires base_url and model")
+        if self.budget_usd is not None and (
+            self.input_price_per_million is None
+            or self.output_price_per_million is None
+        ):
+            raise ValueError("teacher budget requires input and output token prices")
         return self
 
 

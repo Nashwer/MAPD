@@ -265,3 +265,97 @@ not proof of a broken optimizer. At the first replay step the printed scalar
 GRPO loss may still cancel to zero because normalized group advantages sum to
 zero at policy ratio 1; acceptance therefore checks mixed rewards, nonzero
 gradient norm, a changed parameter, and a saved checkpoint.
+
+## Budget-capped DeepSeek protocol smoke
+
+The repository root `.env` is ignored by Git and is loaded automatically by
+`mapd.sh`. Create it without using an editor and without placing the secret in
+shell history:
+
+```bash
+cd ~/workspace/MAPD-repro
+read -rsp "DeepSeek API key: " MAPD_KEY && echo
+printf '%s\n' \
+  'MAPD_TEACHER_BASE_URL=https://api.deepseek.com' \
+  "MAPD_TEACHER_API_KEY=$MAPD_KEY" \
+  'MAPD_TEACHER_MODEL=deepseek-flash' \
+  'MAPD_TEACHER_BUDGET_USD=5.0' \
+  'MAPD_RETRIEVER_URL=http://127.0.0.1:8000/retrieve' > .env
+unset MAPD_KEY
+chmod 600 .env
+```
+
+The template selects `deepseek-flash`, disables thinking, caps each response at
+2,048 tokens, and applies a conservative USD 5 budget using peak-hour
+cache-miss prices. Keep the retrieval service running and generate 20 real
+protocols with:
+
+```bash
+bash mapd.sh retrieval-start
+bash mapd.sh protocol-smoke 20 2>&1 | tee protocol-smoke.log
+```
+
+Every completed sample checkpoints immediately. Per-request token and estimated
+cost records are appended to
+`artifacts/protocol_smoke/teacher_usage.jsonl`; the final aggregate is stored in
+`artifacts/protocol_smoke/manifest.json`. A repository-wide ledger at
+`artifacts/teacher_usage.jsonl` makes the USD 5 guard cumulative across all
+shards on the instance instead of resetting per output directory. Re-running
+the same command reuses valid artifacts. Inspect results without exposing the
+key:
+
+```bash
+tail -n 5 artifacts/protocol_smoke/teacher_usage.jsonl
+cat artifacts/protocol_smoke/manifest.json
+wc -l artifacts/protocol_smoke/artifacts.jsonl
+```
+
+## Portable protocol shards for expiring instances
+
+Protocol synthesis uses the remote teacher API and the retrieval service but
+does not use the GPU. Split work by the stable position in
+`mapd_train_25600.jsonl`; never assign overlapping ranges to different
+instances. For example, run examples 0-99 as a background job:
+
+```bash
+bash mapd.sh protocol-start 0 100
+bash mapd.sh protocol-status
+bash mapd.sh protocol-logs
+```
+
+Each completed example atomically updates `artifacts.jsonl`. A bundle may be
+exported after completion or while the job is still running; only the last
+complete checkpoint is included:
+
+```bash
+bash mapd.sh protocol-export 0 100
+```
+
+The command writes `exports/protocol_offset_0_count_100.tar.gz` and prints the
+archive SHA-256. Download that single file from the instance. It contains no
+`.env` file or API key. On another checkout, upload the archive and restore the
+same shard directory before resuming the same command:
+
+```bash
+mkdir -p incoming
+# Upload protocol_offset_0_count_100.tar.gz into incoming/ using the platform UI or scp.
+bash mapd.sh protocol-restore incoming/protocol_offset_0_count_100.tar.gz
+bash mapd.sh protocol-start 0 100
+```
+
+Completed sample IDs are cache hits, so only unfinished examples call the
+teacher. Independent instances can instead process `0 100`, `100 100`,
+`200 100`, and so on. Merge all downloaded bundles into a de-duplicated,
+conflict-checked training artifact:
+
+```bash
+bash mapd.sh protocol-merge incoming/protocol_offset_*.tar.gz
+cat artifacts/protocol_merged/manifest.json
+```
+
+The bundle records per-file checksums, source range, completed IDs, quality
+count, and usage log. Import refuses checksum mismatches and restore refuses to
+overwrite a different local checkpoint. Restore also de-duplicates its usage
+records into `artifacts/teacher_usage.jsonl`; restore all earlier bundles on a
+new instance before starting more paid synthesis so the budget guard includes
+the previous spend.

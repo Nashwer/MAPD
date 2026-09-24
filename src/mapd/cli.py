@@ -35,7 +35,9 @@ ARTIFACT_SCHEMA_VERSION = 2
 SYNTHESIS_REVISION = 4
 
 
-def _build_teacher(config: AppConfig) -> TeacherClient:
+def _build_teacher(
+    config: AppConfig, *, usage_log_path: Path | None = None
+) -> TeacherClient:
     if config.teacher.backend == "mock":
         return MockTeacher()
     return OpenAICompatibleTeacher(
@@ -44,6 +46,13 @@ def _build_teacher(config: AppConfig) -> TeacherClient:
         api_key_env=config.teacher.api_key_env,
         timeout_seconds=config.teacher.timeout_seconds,
         max_retries=config.teacher.max_retries,
+        thinking_mode=config.teacher.thinking_mode,
+        max_output_tokens=config.teacher.max_output_tokens,
+        budget_usd=config.teacher.budget_usd,
+        input_price_per_million=config.teacher.input_price_per_million,
+        output_price_per_million=config.teacher.output_price_per_million,
+        usage_log_path=usage_log_path,
+        budget_ledger_path=Path("artifacts/teacher_usage.jsonl"),
     )
 
 
@@ -54,14 +63,33 @@ def _build_retriever(config: AppConfig) -> Retriever:
 
 
 def _run_synthesis(config: AppConfig, samples: list[QASample], output_dir: Path) -> list[SynthesisArtifact]:
+    teacher = _build_teacher(
+        config, usage_log_path=output_dir / "teacher_usage.jsonl"
+    )
     pipeline = MASPipeline(
-        teacher=_build_teacher(config),
+        teacher=teacher,
         retriever=_build_retriever(config),
         config=config.mas,
         top_k=config.retrieval.top_k,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
-    config_hash = stable_hash(config.model_dump(mode="json"))
+    # Operational controls such as retries, price tables and the spend limit
+    # must not invalidate completed protocols. In particular, raising a budget
+    # after a safe stop should resume instead of paying to synthesize them again.
+    config_hash = stable_hash(
+        {
+            "seed": config.run.seed,
+            "teacher": {
+                "backend": config.teacher.backend,
+                "model": config.teacher.model,
+                "base_url": config.teacher.base_url,
+                "thinking_mode": config.teacher.thinking_mode,
+                "max_output_tokens": config.teacher.max_output_tokens,
+            },
+            "retrieval": config.retrieval.model_dump(mode="json"),
+            "mas": config.mas.model_dump(mode="json"),
+        }
+    )
     artifact_path = output_dir / "artifacts.jsonl"
     cached_by_id: dict[str, SynthesisArtifact] = {}
     if artifact_path.exists():
@@ -113,6 +141,8 @@ def _run_synthesis(config: AppConfig, samples: list[QASample], output_dir: Path)
                 "checkpoint": str(artifact_path),
                 "time": datetime.now(timezone.utc).isoformat(),
             }
+            if isinstance(teacher, OpenAICompatibleTeacher):
+                progress["teacher_usage"] = teacher.usage_summary()
             typer.echo(json.dumps(progress, ensure_ascii=False))
 
     write_jsonl(artifact_path, artifacts)
@@ -132,6 +162,8 @@ def _run_synthesis(config: AppConfig, samples: list[QASample], output_dir: Path)
         "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
         "synthesis_revision": SYNTHESIS_REVISION,
     }
+    if isinstance(teacher, OpenAICompatibleTeacher):
+        manifest["teacher_usage"] = teacher.usage_summary()
     (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return artifacts
 
