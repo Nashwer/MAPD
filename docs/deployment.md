@@ -61,7 +61,7 @@ success requires all of the following:
 
 ```text
 Virtual environment: HEALTHY (or a successful MISSING -> creation path)
-23 passed
+all tests passed (the Torch-dependent test may run instead of skip)
 AGENT SMOKE OK
 BOOTSTRAP OK
 ```
@@ -203,3 +203,64 @@ Artifacts are written under `artifacts/train_smoke/`. This is intentionally a
 single-GPU, one-step engineering test. It does not claim fidelity to the
 paper's full-parameter, 8-GPU, 200-step run, and it does not yet use veRL's
 distributed actor worker.
+
+## Real data, wiki-18, and GRPO acceptance
+
+After bootstrap, prepare the version-pinned Search-R1 NQ/HotpotQA data:
+
+```bash
+bash mapd.sh data-setup | tee data-setup.log
+```
+
+Success ends with `REAL DATA PREP OK`. Inspect the auditable counts without an
+editor:
+
+```bash
+cat data/training/manifest.json
+wc -l data/training/mapd_train_25600.jsonl
+```
+
+Download the compressed wiki-18 corpus and build the persistent sparse index.
+This is the longest CPU/disk stage and may consume a substantial part of a
+one-day instance:
+
+```bash
+bash mapd.sh wiki-start
+bash mapd.sh wiki-status
+bash mapd.sh wiki-logs
+```
+
+The SSH session may be closed after `wiki-start`; re-run `wiki-status` and
+`wiki-logs` later. Success ends with `WIKI18 INDEX BUILD OK` (or
+`WIKI18 INDEX REUSED`). The corpus download is about 5.1 GB;
+the final SQLite index is larger, so check free disk first with `df -h .`.
+Start and inspect the headless service:
+
+```bash
+bash mapd.sh retrieval-start
+bash mapd.sh retrieval-status
+bash mapd.sh retrieval-logs
+bash mapd.sh retrieval-smoke 20
+```
+
+The smoke command performs real top-3 requests and prints answer recall plus
+document IDs. It accepts recall zero by default because this portable FTS5/BM25
+backend is not the paper's E5 dense index; the purpose of the first run is to
+verify the full corpus/API path and measure the actual baseline.
+
+Finally, perform the nonzero-GRPO acceptance:
+
+```bash
+bash mapd.sh grpo-smoke > grpo-smoke.log 2>&1
+tail -n 100 grpo-smoke.log
+```
+
+It searches up to 12 real questions for an 8-rollout group containing both
+reward 0 and reward 1, releases vLLM, then executes a GRPO-only optimizer step.
+Success requires both `NONZERO REWARD VARIANCE ROLLOUT OK` and
+`REAL GRPO OPTIMIZER SMOKE OK`. If no mixed group is found, run the rollout
+script directly with a larger `--candidate-limit`; this is a sampling outcome,
+not proof of a broken optimizer. At the first replay step the printed scalar
+GRPO loss may still cancel to zero because normalized group advantages sum to
+zero at policy ratio 1; acceptance therefore checks mixed rewards, nonzero
+gradient norm, a changed parameter, and a saved checkpoint.

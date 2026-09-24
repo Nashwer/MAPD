@@ -17,7 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9", "pytest-cov>=5,<7"]
-data = ["pyarrow>=17,<22"]
+data = ["huggingface-hub>=0.28,<2", "pyarrow>=17,<22"]
 
 [project.scripts]
 mapd = "mapd.cli:app"
@@ -31,4 +31,3 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-

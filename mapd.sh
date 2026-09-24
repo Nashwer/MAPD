@@ -3,6 +3,11 @@ set -euo pipefail
 
 PROJECT_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 export VERL_VENV=${VERL_VENV:-"$(dirname "$PROJECT_ROOT")/verl/.venv"}
+if [[ -f "$PROJECT_ROOT/scripts/bootstrap_versions.env" ]]; then
+  # shellcheck source=scripts/bootstrap_versions.env
+  source "$PROJECT_ROOT/scripts/bootstrap_versions.env"
+  export MAPD_QA_REVISION MAPD_WIKI18_REVISION MAPD_WIKI18_E5_REVISION
+fi
 
 if [[ -x /usr/local/cuda-13.0/bin/nvcc ]]; then
   export CUDA_HOME=${CUDA_HOME:-/usr/local/cuda-13.0}
@@ -15,8 +20,14 @@ Usage: bash mapd.sh COMMAND
 
 Commands:
   bootstrap  Rebuild or repair the complete ephemeral GPU-server environment
-  setup    Install into the sibling veRL environment and run full verification
-  verify   Run tests and the offline end-to-end smoke flow
+  setup      Install into the sibling veRL environment and run full verification
+  verify     Run tests and the offline end-to-end smoke flow
+  data-setup Download and prepare the de-duplicated 25,600-example training set
+  wiki-setup Download wiki-18 and build/reuse the persistent SQLite FTS5 index
+  wiki-start/status/logs/stop  Manage wiki-18 setup as a background job
+  retrieval-start/status/logs/stop  Manage the command-line retrieval service
+  retrieval-smoke  Check real top-3 retrieval against normalized QA examples
+  grpo-smoke Run real rollouts until rewards vary, then perform one GRPO update
   model-smoke  Load the local Qwen model and run one GPU inference
   agent-smoke  Run one real Qwen -> BM25 search -> answer trajectory
   train-smoke  Run rollout, dual-context MAPD update, and checkpoint reload
@@ -40,6 +51,71 @@ case ${1:-} in
     ;;
   verify)
     bash "$PROJECT_ROOT/scripts/run_smoke.sh"
+    ;;
+  data-setup)
+    cd "$PROJECT_ROOT"
+    "$VERL_VENV/bin/python" scripts/download_real_data.py qa
+    qa_revision=$("$VERL_VENV/bin/python" -c 'import json; print(json.load(open("data/downloads/qa/download-manifest.json"))["resolved_revision"])')
+    "$VERL_VENV/bin/python" scripts/prepare_real_data.py \
+      --train data/downloads/qa/train.parquet \
+      --heldout data/downloads/qa/test.parquet \
+      --source-revision "$qa_revision"
+    ;;
+  wiki-setup)
+    cd "$PROJECT_ROOT"
+    "$VERL_VENV/bin/python" scripts/download_real_data.py wiki
+    wiki_revision=$("$VERL_VENV/bin/python" -c 'import json; print(json.load(open("data/downloads/wiki/download-manifest.json"))["resolved_revision"])')
+    "$VERL_VENV/bin/python" scripts/build_retrieval_index.py \
+      --corpus data/downloads/wiki/wiki-18.jsonl.gz \
+      --index data/wiki18/index/wiki18.sqlite3 \
+      --source-revision "$wiki_revision"
+    ;;
+  wiki-start)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" start wiki-setup bash "$PROJECT_ROOT/mapd.sh" wiki-setup
+    ;;
+  wiki-status)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" status wiki-setup
+    ;;
+  wiki-logs)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" logs wiki-setup 100
+    ;;
+  wiki-stop)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" stop wiki-setup
+    ;;
+  retrieval-start)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" start retriever \
+      "$VERL_VENV/bin/python" "$PROJECT_ROOT/scripts/serve_retriever.py" \
+      --index "$PROJECT_ROOT/data/wiki18/index/wiki18.sqlite3"
+    for _ in {1..30}; do
+      if curl -fsS http://127.0.0.1:8000/health; then
+        echo
+        exit 0
+      fi
+      sleep 1
+    done
+    echo "retriever did not become healthy; inspect: bash mapd.sh retrieval-logs" >&2
+    exit 1
+    ;;
+  retrieval-status)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" status retriever
+    ;;
+  retrieval-logs)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" logs retriever 100
+    ;;
+  retrieval-stop)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" stop retriever
+    ;;
+  retrieval-smoke)
+    cd "$PROJECT_ROOT"
+    "$VERL_VENV/bin/python" scripts/retrieval_smoke.py \
+      --qa data/training/mapd_train_25600.jsonl --limit "${2:-20}" --top-k 3
+    ;;
+  grpo-smoke)
+    cd "$PROJECT_ROOT"
+    MODEL_PATH=${2:-${MAPD_MODEL_PATH:-"$HOME/models/Qwen3-1.7B"}}
+    "$VERL_VENV/bin/python" scripts/real_grpo_rollout.py \
+      --model "$MODEL_PATH" --qa data/training/mapd_train_25600.jsonl
+    "$VERL_VENV/bin/python" scripts/real_grpo_optimize.py --model "$MODEL_PATH"
     ;;
   model-smoke)
     cd "$PROJECT_ROOT"

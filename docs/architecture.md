@@ -70,8 +70,8 @@ student rollout, or retrieval queries.
 | Module | Responsibility | Stable boundary |
 | --- | --- | --- |
 | `config` | paper parameters and explicitly marked reproduction choices | `AppConfig` |
-| `data` | QA schema and veRL record conversion | `QASample` / `to_verl_record()` |
-| `retrieval` | local BM25 or Search-R1-compatible HTTP lookup | `Retriever.search()` |
+| `data` | QA schema, Search-R1 normalization/splitting, and veRL record conversion | `QASample` / `prepare_searchr1_dataset()` / `to_verl_record()` |
+| `retrieval` | fixture BM25, persistent wiki-18 FTS5, service, or compatible HTTP lookup | `Retriever.search()` |
 | `environment` | action parser and multi-turn student search environment | `AgenticSearchEnvironment.rollout()` |
 | `mas` | Orchestrator, Searcher, Repair, Protocolizer and Stage A/B/C coordinator | `MASPipeline.synthesize()` |
 | `protocol` | JSON schema, leak check, grounding check and admission gate | `validate_protocol()` |
@@ -133,8 +133,9 @@ model weights. Full wiki-18 retrieval is also outside this already-verified smok
 The separate `train-smoke` acceptance path now implements those missing single-device mechanics in two
 processes: vLLM first records exact response token ids and rollout log-probabilities; after vLLM exits, a
 Transformers model replays the same tokens under normal and protocol-conditioned contexts, performs the
-joint backward pass, updates the last decoder layer, saves a checkpoint, and reloads it. This path is
-implemented but remains pending real Qwen GPU verification.
+joint backward pass, updates the last decoder layer, saves a checkpoint, and reloads it. This path has now
+passed real Qwen3-1.7B GPU verification. The accepted group had uniform zero rewards, so the same run did not
+exercise a nonzero GRPO gradient; that remains an explicit acceptance item for real-data rollouts.
 
 ## 6. What remains backend-specific
 
@@ -144,7 +145,9 @@ trainer implementation for those missing details, so they cannot honestly be cal
 They are isolated behind configuration and `OnPolicyTrainingBackend` so that authoritative code or
 experimentally verified choices can replace them without changing the offline artifacts.
 
-The next acceptance milestone is to run `bash mapd.sh train-smoke` on Qwen3-1.7B. Once it passes, the next
-implementation milestone is moving the same full-vocabulary dual-forward objective into a veRL worker. A
-standard veRL custom policy-loss hook is insufficient because it receives selected-token log-probabilities,
-whereas MAPD OPSD requires both branches' complete vocabulary logits.
+The real NQ/HotpotQA normalization, wiki-18 sparse index/service, recall@3 check, and mixed-reward GRPO
+acceptance commands now exist but require a full server run. The next implementation milestone after that
+acceptance is moving the same full-vocabulary dual-forward objective into a veRL worker. A standard veRL
+custom policy-loss hook is insufficient because it receives selected-token log-probabilities, whereas MAPD
+OPSD requires both branches' complete vocabulary logits. The repository-native wiki-18 service uses SQLite
+FTS5/BM25 for portability; matching the paper's Search-R1 E5 dense retrieval remains a separate fidelity item.

@@ -7,6 +7,8 @@
 - 结构化 MAPD protocol 与训练样本数据契约
 - Mock / OpenAI-compatible 教师接口
 - 内存 BM25 / HTTP 检索接口
+- Search-R1 NQ/HotpotQA 流式标准化、去重、held-out 隔离与 25,600 条子集构建
+- 可持久化的 wiki-18 SQLite FTS5 索引与 Search-R1 兼容 HTTP 服务
 - 依赖感知 Orchestrator、独立多查询 Searcher、Answerer、Repair、Protocolizer
 - Schema、EM、抽取式 grounding、答案泄漏质量门
 - student 多轮搜索环境、G 路 rollout、EM reward 和 self-rollout fallback
@@ -17,14 +19,19 @@
 
 ## 当前进度
 
-截至 2026-09-24，轻量核心的 23 项本地测试全部通过；Qwen3-1.7B 已在 RTX
+截至 2026-09-24，轻量核心的 29 项本地测试全部通过（另 1 项无 Torch 时跳过）；Qwen3-1.7B 已在 RTX
 4090 D 上通过真实 vLLM 推理和两轮 agent 搜索验证。真实轨迹完成了
 `<search>` → BM25 `<information>` → `<answer>`，严格 EM reward 为 `1.0`。
+单卡 `train-smoke` 也已完成真实 Qwen3-1.7B 双上下文反传、参数更新和
+checkpoint reload；该次 rollout group 的 reward 全为 0，因此 GPU 运行中的 GRPO
+贡献为 0，OPSD 路径与联合优化器闭环已得到验证。
 
 仓库已经包含面向一天期 GPU 实例的一键重建脚本，但最新脚本仍需在下一台
 `/home` 全空的新实例上做首次端到端验收。单卡双上下文 token replay、全词表
-OPSD、一次 optimizer step 和 checkpoint reload 的 `train-smoke` 代码已经实现，
-仍待 GPU 验收；分布式 veRL worker、完整 wiki-18、论文规模训练和七数据集评测尚未完成。
+OPSD、一次 optimizer step 和 checkpoint reload 的 `train-smoke` 已通过 GPU 验收；
+真实数据下载/标准化、完整 wiki-18 建库、top-3 检索和非零组内 reward variance 的
+GRPO 验收入口已实现，但还要在服务器下载大文件并实际运行。分布式 veRL worker、
+论文规模训练和七数据集评测尚未完成。
 不能将任一 smoke 通过等同于论文结果复现。
 
 详细的完成项、验证环境、待办边界和下次继续顺序见
@@ -114,6 +121,29 @@ bash mapd.sh train-smoke
 再用同一 Qwen checkpoint 重放普通/特权上下文，只训练最后一个 decoder layer，执行一次
 MAPD 联合反传，并验证 checkpoint 能恢复。该命令是低显存工程验收，不是论文的 8 GPU
 正式训练配置。
+
+## 真实数据、wiki-18 与非零 GRPO 验收
+
+以下命令均不需要手工编辑文件：
+
+```bash
+bash mapd.sh data-setup
+bash mapd.sh wiki-setup
+bash mapd.sh retrieval-start
+bash mapd.sh retrieval-status
+bash mapd.sh retrieval-smoke 20
+bash mapd.sh grpo-smoke
+```
+
+`data-setup` 下载固定 revision 的 Search-R1 NQ/HotpotQA Parquet，使用其 test split
+建立 held-out 问题集合，按规范化问题去重并排除重叠，然后以固定 seed 构建 25,600 条
+训练子集。论文未公开这 25,600 条的抽样 ID，因此当前实现明确采用 NQ/HotpotQA
+各 12,800 条的可复现分层抽样。
+
+`wiki-setup` 下载约 5.1 GB 的压缩 wiki-18 语料并构建磁盘持久化 SQLite FTS5/BM25
+索引；这是仓库自带、低依赖的复现后端，不是论文/Search-R1 的 E5 dense index。
+`grpo-smoke` 会在真实 QA 和 top-3 检索上寻找同时包含 0/1 reward 的 8 路 rollout
+group，再在第二个进程执行一次 GRPO-only 更新并保存 checkpoint。
 
 
 ## 后续训练路线

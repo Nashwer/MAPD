@@ -52,12 +52,23 @@ def main() -> int:
             "model_id": os.environ.get("MAPD_MODEL_ID"),
             "numpy": os.environ.get("MAPD_NUMPY_VERSION"),
             "cuda_series": os.environ.get("MAPD_CUDA_SERIES"),
+            "qa_revision": os.environ.get("MAPD_QA_REVISION"),
+            "wiki18_revision": os.environ.get("MAPD_WIKI18_REVISION"),
+            "wiki18_e5_revision": os.environ.get("MAPD_WIKI18_E5_REVISION"),
         },
         "platform": platform.platform(),
         "python": platform.python_version(),
         "packages": {
             name: package_version(name)
-            for name in ("verl", "torch", "vllm", "numpy", "flashinfer-python", "pyarrow")
+            for name in (
+                "verl",
+                "torch",
+                "vllm",
+                "numpy",
+                "flashinfer-python",
+                "pyarrow",
+                "huggingface-hub",
+            )
         },
         "cuda": {
             "available": torch.cuda.is_available(),
