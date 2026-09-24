@@ -118,7 +118,15 @@ def _run_synthesis(config: AppConfig, samples: list[QASample], output_dir: Path)
             artifacts.append(cached)
             cache_hits += 1
         else:
-            artifact = pipeline.synthesize(sample)
+            try:
+                artifact = pipeline.synthesize(sample)
+            except Exception as error:
+                # Preserve every completed sample even when the next sample
+                # fails between configured progress checkpoints.
+                write_jsonl(artifact_path, artifacts)
+                raise RuntimeError(
+                    f"synthesis failed for example_id={sample.id!r}: {error}"
+                ) from error
             artifact.metadata.update(
                 {
                     "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,

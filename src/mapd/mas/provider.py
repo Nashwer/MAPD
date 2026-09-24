@@ -29,6 +29,7 @@ ROLE_INSTRUCTIONS = {
     ),
     "searcher": (
         "Produce up to max_queries retrieval queries for the objective. Do not include an oracle answer. "
+        "When retry_instruction is present, follow it and substantially rewrite the rejected candidates. "
         "Return exactly {\"queries\":[\"query\"]}; queries must be a non-empty string array."
     ),
     "search_summarizer": (
