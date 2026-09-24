@@ -6,7 +6,12 @@ from threading import Thread
 from mapd.retrieval.http_service import RetrievalHandler, RetrievalHTTPServer
 from mapd.retrieval.retriever_server import HTTPRetriever
 from mapd.retrieval.wiki18 import BM25Retriever
-from mapd.retrieval.sqlite_fts import SQLiteFTSRetriever, build_sqlite_fts_index
+from mapd.retrieval.sqlite_fts import (
+    SQLiteFTSRetriever,
+    _fts_expression,
+    _query_tokens,
+    build_sqlite_fts_index,
+)
 
 
 def test_bm25_returns_relevant_passage():
@@ -61,3 +66,11 @@ def test_index_builder_streams_mislabeled_wiki18_tar_gzip(tmp_path):
     result = build_sqlite_fts_index(corpus, index)
     assert result["documents"] == 3
     assert SQLiteFTSRetriever(index).search("Eiffel Tower", 1)[0].id == "p1"
+
+
+def test_full_corpus_query_plan_drops_high_frequency_question_words():
+    tokens = _query_tokens("Who directed the 1997 film The Winter Guest?")
+    assert tokens == ["directed", "1997", "film", "winter", "guest"]
+    assert _fts_expression(tokens, operator="AND") == (
+        '"directed" AND "1997" AND "film" AND "winter" AND "guest"'
+    )

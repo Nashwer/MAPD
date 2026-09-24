@@ -16,6 +16,44 @@ from mapd.retrieval.schema import RetrievedPassage
 
 
 _TOKEN_PATTERN = re.compile(r"\w+", re.UNICODE)
+_STOP_WORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "did",
+    "do",
+    "does",
+    "for",
+    "from",
+    "had",
+    "has",
+    "have",
+    "how",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "this",
+    "to",
+    "was",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "with",
+}
 
 
 def build_sqlite_fts_index(
@@ -132,21 +170,20 @@ class SQLiteFTSRetriever:
     def search(self, query: str, top_k: int) -> list[RetrievedPassage]:
         if top_k < 1:
             raise ValueError("top_k must be positive")
-        expression = _fts_expression(query)
+        tokens = _query_tokens(query)
+        expression = _fts_expression(tokens, operator="AND")
         if not expression:
             return []
         with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT passages.id, passages.contents, bm25(passages_fts) AS rank
-                FROM passages_fts
-                JOIN passages ON passages.rowid = passages_fts.rowid
-                WHERE passages_fts MATCH ?
-                ORDER BY rank
-                LIMIT ?
-                """,
-                (expression, top_k),
-            ).fetchall()
+            rows = _search_rows(connection, expression, top_k)
+            if not rows and len(tokens) > 1:
+                # Relax only to a few selective terms. OR-ing every word in a
+                # natural-language question can scan enormous posting lists
+                # (for example "who", "the", "is") on the 21M-doc corpus.
+                fallback = sorted(tokens, key=lambda token: (-len(token), token))[:3]
+                rows = _search_rows(
+                    connection, _fts_expression(fallback, operator="OR"), top_k
+                )
         return [
             RetrievedPassage(id=str(row[0]), contents=str(row[1]), score=-float(row[2]))
             for row in rows
@@ -160,13 +197,45 @@ class SQLiteFTSRetriever:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(f"file:{self.index_path}?mode=ro", uri=True)
         connection.execute("PRAGMA query_only=ON")
+        connection.execute("PRAGMA cache_size=-65536")
+        connection.execute("PRAGMA mmap_size=268435456")
         return connection
 
 
-def _fts_expression(query: str) -> str:
-    tokens = _TOKEN_PATTERN.findall(query.casefold())
+def _query_tokens(query: str) -> list[str]:
+    raw = _TOKEN_PATTERN.findall(query.casefold())
+    filtered = [
+        token
+        for token in raw
+        if token not in _STOP_WORDS and (len(token) > 2 or token.isdigit())
+    ]
+    selected = filtered or raw
+    # Preserve query order, remove repeats, and bound posting-list work.
+    return list(dict.fromkeys(selected))[:12]
+
+
+def _fts_expression(tokens: list[str], *, operator: str) -> str:
+    if operator not in {"AND", "OR"}:
+        raise ValueError("FTS operator must be AND or OR")
     # FTS syntax is never interpolated directly: each token is a quoted phrase.
-    return " OR ".join(f'"{token.replace(chr(34), chr(34) * 2)}"' for token in tokens)
+    quoted = [f'"{token.replace(chr(34), chr(34) * 2)}"' for token in tokens]
+    return f" {operator} ".join(quoted)
+
+
+def _search_rows(
+    connection: sqlite3.Connection, expression: str, top_k: int
+) -> list[tuple[object, ...]]:
+    return connection.execute(
+        """
+        SELECT passages.id, passages.contents, bm25(passages_fts) AS rank
+        FROM passages_fts
+        JOIN passages ON passages.rowid = passages_fts.rowid
+        WHERE passages_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+        """,
+        (expression, top_k),
+    ).fetchall()
 
 
 @contextmanager
