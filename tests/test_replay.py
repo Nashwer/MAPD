@@ -20,7 +20,9 @@ class RecordingTokenizer:
             "enable_thinking": False,
         }
         self.rendered.append(deepcopy(messages))
-        return [1, len(messages), len(messages[-1]["content"]) % 17 + 2]
+        return {
+            "input_ids": [[1, len(messages), len(messages[-1]["content"]) % 17 + 2]]
+        }
 
     def encode(self, text, add_special_tokens=False):
         assert not add_special_tokens
@@ -82,3 +84,20 @@ def test_agent_turn_rejects_misaligned_rollout_log_probs():
             token_ids=[1, 2],
             token_log_probs=[-0.1],
         )
+
+
+def test_tokenizer_mapping_must_contain_input_ids():
+    class BrokenTokenizer(RecordingTokenizer):
+        def apply_chat_template(self, messages, **kwargs):
+            del messages, kwargs
+            return {"attention_mask": [[1, 1]]}
+
+    sample = QASample(id="q1", question="Where?", answers=["Paris"])
+    trajectory = AgentTrajectory(
+        example_id="q1",
+        prompt="Where?",
+        reward=0.0,
+        turns=[AgentTurn(turn_index=1, model_output="x", action="invalid", token_ids=[3])],
+    )
+    with pytest.raises(ValueError, match="no input_ids"):
+        build_token_replay(sample, trajectory, BrokenTokenizer(), None)

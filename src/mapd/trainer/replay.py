@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -93,6 +94,10 @@ def _render_prefix(tokenizer: Any, messages: list[dict[str, str]]) -> list[int]:
     except TypeError:
         kwargs.pop("enable_thinking")
         rendered = tokenizer.apply_chat_template(messages, **kwargs)
+    if isinstance(rendered, Mapping):
+        if "input_ids" not in rendered:
+            raise ValueError("tokenizer chat template returned no input_ids")
+        rendered = rendered["input_ids"]
     if hasattr(rendered, "tolist"):
         rendered = rendered.tolist()
     if rendered and isinstance(rendered[0], list):

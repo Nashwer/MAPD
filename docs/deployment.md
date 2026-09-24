@@ -61,7 +61,7 @@ success requires all of the following:
 
 ```text
 Virtual environment: HEALTHY (or a successful MISSING -> creation path)
-22 passed
+23 passed
 AGENT SMOKE OK
 BOOTSTRAP OK
 ```

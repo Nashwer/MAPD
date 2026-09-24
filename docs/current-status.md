@@ -9,7 +9,7 @@
 - 已建立 MAPD 的数据、检索、搜索环境、MAS、协议质量门、奖励与训练目标模块边界。
 - Mock 教师与 fixture BM25 可完成离线协议合成、在线多轨迹 rollout、严格 EM 奖励、PI 选择和联合损失计算。
 - 协议 artifact 支持校验、缓存命中、断点续跑以及 JSONL/Parquet veRL 数据导出。
-- Windows 轻量本地测试共 22 项，当前全部通过；另有 1 项依赖 PyTorch 的真实
+- Windows 轻量本地测试共 23 项，当前全部通过；另有 1 项依赖 PyTorch 的真实
   optimizer/checkpoint 测试会在服务器环境执行，本机无 Torch 时跳过。
 
 ### Linux GPU 推理链路

@@ -58,7 +58,7 @@ def main() -> int:
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
         local_files_only=True,
-        torch_dtype=torch.float32,
+        dtype=torch.float32,
         low_cpu_mem_usage=True,
         attn_implementation="sdpa",
     ).to("cuda")
