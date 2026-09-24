@@ -45,6 +45,8 @@ Commands:
   protocol-export OFFSET COUNT  Create a checksummed portable shard bundle
   protocol-restore BUNDLE  Restore a bundle to its original artifact directory
   protocol-merge BUNDLE...  Merge and de-duplicate exported protocol bundles
+  protocol-train-smoke OFFSET COUNT  Train on one real protocol shard and reload checkpoint
+  protocol-train-start/status/logs/stop  Manage the real-protocol training smoke job
   model-smoke  Load the local Qwen model and run one GPU inference
   agent-smoke  Run one real Qwen -> BM25 search -> answer trajectory
   train-smoke  Run rollout, dual-context MAPD update, and checkpoint reload
@@ -203,6 +205,52 @@ case ${1:-} in
     [[ "$#" -gt 0 ]] || { echo "at least one BUNDLE is required" >&2; exit 2; }
     "$VERL_VENV/bin/python" scripts/protocol_bundle.py merge \
       --output "$PROJECT_ROOT/artifacts/protocol_merged" "$@"
+    ;;
+  protocol-train-smoke)
+    cd "$PROJECT_ROOT"
+    OFFSET=${2:-0}
+    COUNT=${3:-20}
+    MODEL_PATH=${4:-${MAPD_MODEL_PATH:-"$HOME/models/Qwen3-1.7B"}}
+    [[ "$OFFSET" =~ ^[0-9]+$ && "$COUNT" =~ ^[1-9][0-9]*$ ]] || {
+      echo "OFFSET must be nonnegative and COUNT must be positive" >&2
+      exit 2
+    }
+    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}"
+    [[ -s "$SHARD_DIR/artifacts.jsonl" ]] || {
+      echo "protocol shard not found: $SHARD_DIR/artifacts.jsonl" >&2
+      exit 1
+    }
+    if ! curl -fsS --connect-timeout 1 --max-time 3 http://127.0.0.1:8000/health >/dev/null; then
+      echo "retriever is not healthy; run: bash mapd.sh retrieval-start" >&2
+      exit 1
+    fi
+    OUTPUT_DIR="$PROJECT_ROOT/artifacts/protocol_train_smoke/offset_${OFFSET}_count_${COUNT}"
+    "$VERL_VENV/bin/python" scripts/protocol_train_smoke_rollout.py \
+      --model "$MODEL_PATH" \
+      --artifacts "$SHARD_DIR/artifacts.jsonl" \
+      --output-dir "$OUTPUT_DIR" \
+      --retriever-url "${MAPD_RETRIEVER_URL:-http://127.0.0.1:8000/retrieve}"
+    "$VERL_VENV/bin/python" scripts/protocol_train_smoke_optimize.py \
+      --model "$MODEL_PATH" \
+      --artifacts "$SHARD_DIR/artifacts.jsonl" \
+      --rollouts "$OUTPUT_DIR/rollouts.jsonl" \
+      --output-dir "$OUTPUT_DIR"
+    ;;
+  protocol-train-start)
+    OFFSET=${2:-0}
+    COUNT=${3:-20}
+    MODEL_PATH=${4:-${MAPD_MODEL_PATH:-"$HOME/models/Qwen3-1.7B"}}
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" start protocol-train-smoke \
+      bash "$PROJECT_ROOT/mapd.sh" protocol-train-smoke "$OFFSET" "$COUNT" "$MODEL_PATH"
+    ;;
+  protocol-train-status)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" status protocol-train-smoke
+    ;;
+  protocol-train-logs)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" logs protocol-train-smoke 100
+    ;;
+  protocol-train-stop)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" stop protocol-train-smoke
     ;;
   model-smoke)
     cd "$PROJECT_ROOT"

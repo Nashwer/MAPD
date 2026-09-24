@@ -359,3 +359,37 @@ overwrite a different local checkpoint. Restore also de-duplicates its usage
 records into `artifacts/teacher_usage.jsonl`; restore all earlier bundles on a
 new instance before starting more paid synthesis so the budget guard includes
 the previous spend.
+
+## Real-protocol end-to-end training smoke
+
+After a shard finishes, use its complete sample set to verify the functional
+training chain without making more teacher API calls:
+
+```bash
+bash mapd.sh retrieval-start
+bash mapd.sh protocol-train-start 0 20
+bash mapd.sh protocol-train-status
+bash mapd.sh protocol-train-logs
+```
+
+The command first performs two real Qwen rollouts per example against the
+wiki-18 HTTP retriever. Rollouts are checkpointed after every example and are
+reused when the command is restarted with the same model and settings. It then
+loads the train model once and runs one single-device update per usable
+example. Quality-gate-passed protocols supply protocol PI. Rejected protocols
+may use a correct student rollout as fallback; a rejected example with neither
+PI nor nonzero group-relative advantage is recorded and skipped.
+
+This is a small functional acceptance run: it trains only the final decoder
+layer and is not the paper's distributed 8-GPU run. Success ends with
+`REAL PROTOCOL MAPD TRAINING OK`. Inspect the aggregate and per-example records
+with:
+
+```bash
+cat artifacts/protocol_train_smoke/offset_0_count_20/manifest.json
+cat artifacts/protocol_train_smoke/offset_0_count_20/steps.json
+```
+
+The final checkpoint is written to
+`artifacts/protocol_train_smoke/offset_0_count_20/checkpoint-final/checkpoint.pt`
+and is reloaded before the command reports success.
