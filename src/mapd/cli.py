@@ -359,7 +359,13 @@ def smoke(config: Path = typer.Option(Path("configs/local_smoke.yaml"), exists=T
             )
             for trajectory in trajectories
         ]
-        loss = compute_mapd_loss(loss_inputs, lambda_opsd=settings.training.lambda_opsd)
+        loss = compute_mapd_loss(
+            loss_inputs,
+            clip_low=settings.training.clip_low,
+            clip_high=settings.training.clip_high,
+            beta=settings.training.reference_kl_beta,
+            lambda_opsd=settings.training.lambda_opsd,
+        )
         online_steps.append(
             {
                 "example_id": sample.id,

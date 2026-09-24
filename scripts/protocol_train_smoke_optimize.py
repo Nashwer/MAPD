@@ -33,7 +33,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--learning-rate", type=float, default=1e-6)
     parser.add_argument("--lambda-opsd", type=float, default=0.05)
-    parser.add_argument("--max-sequence-length", type=int, default=4096)
+    parser.add_argument("--clip-low", type=float, default=0.2)
+    parser.add_argument("--clip-high", type=float, default=0.2)
+    parser.add_argument("--reference-kl-beta", type=float, default=0.001)
+    parser.add_argument("--max-sequence-length", type=int, default=4608)
     return parser.parse_args()
 
 
@@ -60,6 +63,23 @@ def main() -> int:
     ).to("cuda")
     model.config.use_cache = False
     trainable = enable_last_decoder_layer(model)
+    reference_model = None
+    if args.reference_kl_beta > 0:
+        print(
+            f"loading frozen reference model in bfloat16 (beta={args.reference_kl_beta}): "
+            f"{args.model}",
+            flush=True,
+        )
+        reference_model = AutoModelForCausalLM.from_pretrained(
+            args.model,
+            local_files_only=True,
+            dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
+            attn_implementation="sdpa",
+        ).to("cuda")
+        reference_model.config.use_cache = False
+        reference_model.eval()
+        reference_model.requires_grad_(False)
     optimizer = torch.optim.AdamW(
         (parameter for _, parameter in trainable),
         lr=args.learning_rate,
@@ -95,6 +115,10 @@ def main() -> int:
             artifact.sample,
             group,
             privileged,
+            reference_model=reference_model,
+            clip_low=args.clip_low,
+            clip_high=args.clip_high,
+            beta=args.reference_kl_beta,
             lambda_opsd=args.lambda_opsd,
             max_sequence_length=args.max_sequence_length,
         )
@@ -151,7 +175,7 @@ def main() -> int:
         raise RuntimeError("final checkpoint reload verification failed")
 
     summary = {
-        "schema": "mapd-real-protocol-train-smoke-v1",
+        "schema": "mapd-real-protocol-train-smoke-v2",
         "examples": len(artifacts),
         "passed_protocols": sum(item.quality.passed for item in artifacts),
         "optimizer_steps": optimizer_step,
@@ -166,6 +190,19 @@ def main() -> int:
         "grpo_signal_steps": sum(
             len(set(item["rewards"])) > 1 and item["optimized"] for item in history
         ),
+        "mean_reference_kl": (
+            sum(item["loss"]["reference_kl"] for item in history if item["optimized"])
+            / optimizer_step
+        ),
+        "training_config": {
+            "group_size": len(next(iter(groups.values()))),
+            "learning_rate": args.learning_rate,
+            "clip_low": args.clip_low,
+            "clip_high": args.clip_high,
+            "reference_kl_beta": args.reference_kl_beta,
+            "lambda_opsd": args.lambda_opsd,
+            "max_sequence_length": args.max_sequence_length,
+        },
         "checkpoint": str(checkpoint.resolve()),
         "reload_verified": True,
     }

@@ -24,7 +24,10 @@ def main() -> int:
     parser.add_argument("--input-dir", type=Path, default=Path("artifacts/real_grpo_smoke"))
     parser.add_argument("--output", type=Path, default=Path("artifacts/real_grpo_smoke/checkpoint-step-1"))
     parser.add_argument("--learning-rate", type=float, default=1e-6)
-    parser.add_argument("--max-sequence-length", type=int, default=4096)
+    parser.add_argument("--clip-low", type=float, default=0.2)
+    parser.add_argument("--clip-high", type=float, default=0.2)
+    parser.add_argument("--reference-kl-beta", type=float, default=0.001)
+    parser.add_argument("--max-sequence-length", type=int, default=4608)
     args = parser.parse_args()
 
     import torch
@@ -53,6 +56,23 @@ def main() -> int:
     ).to("cuda")
     model.config.use_cache = False
     trainable = enable_last_decoder_layer(model)
+    reference_model = None
+    if args.reference_kl_beta > 0:
+        print(
+            f"loading frozen reference model in bfloat16 (beta={args.reference_kl_beta}): "
+            f"{args.model}",
+            flush=True,
+        )
+        reference_model = AutoModelForCausalLM.from_pretrained(
+            args.model,
+            local_files_only=True,
+            dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
+            attn_implementation="sdpa",
+        ).to("cuda")
+        reference_model.config.use_cache = False
+        reference_model.eval()
+        reference_model.requires_grad_(False)
     optimizer = torch.optim.AdamW(
         (parameter for _, parameter in trainable),
         lr=args.learning_rate,
@@ -65,6 +85,10 @@ def main() -> int:
         samples[0],
         trajectories,
         None,
+        reference_model=reference_model,
+        clip_low=args.clip_low,
+        clip_high=args.clip_high,
+        beta=args.reference_kl_beta,
         lambda_opsd=0.0,
         max_sequence_length=args.max_sequence_length,
     )

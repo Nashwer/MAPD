@@ -49,7 +49,11 @@ training:
   # These are explicit reproduction choices and must be tracked in experiment manifests.
   clip_low: 0.2
   clip_high: 0.2
-  reference_kl_beta: 0.0
+  # MAPD prints beta symbolically but does not disclose its value. 0.001 is
+  # the explicit Search-R1-compatible reproduction choice used by our runner.
+  reference_kl_beta: 0.001
+  # MAPD does not disclose rollout temperature; Search-R1 uses 1.0.
+  rollout_temperature: 1.0
   num_gpus: 8
 evaluation:
   # The paper reports five evaluation seeds but does not list their values.

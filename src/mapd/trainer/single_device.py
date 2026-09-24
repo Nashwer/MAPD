@@ -47,6 +47,7 @@ def optimize_replay_group(
     trajectories: list[AgentTrajectory],
     privileged_information: PrivilegedInformation | None,
     *,
+    reference_model: Any | None = None,
     clip_low: float = 0.2,
     clip_high: float = 0.2,
     beta: float = 0.0,
@@ -64,9 +65,9 @@ def optimize_replay_group(
 
     if not trajectories:
         raise ValueError("a rollout group cannot be empty")
-    if beta != 0:
-        raise NotImplementedError("reference-policy KL requires a frozen reference model")
-    if min(clip_low, clip_high, lambda_opsd, max_grad_norm) < 0:
+    if beta > 0 and reference_model is None:
+        raise ValueError("a frozen reference model is required when beta is positive")
+    if min(clip_low, clip_high, beta, lambda_opsd, max_grad_norm) < 0:
         raise ValueError("loss coefficients and max_grad_norm must be non-negative")
 
     replays = [
@@ -85,6 +86,7 @@ def optimize_replay_group(
     model.eval()
     optimizer.zero_grad(set_to_none=True)
     grpo_value = 0.0
+    reference_kl_value = 0.0
     opsd_value = 0.0
     group_size = len(trajectories)
 
@@ -92,6 +94,18 @@ def optimize_replay_group(
         replays, trajectory_tokens, advantages
     ):
         for turn in replay:
+            reference_log_probs = None
+            if reference_model is not None and beta > 0:
+                with torch.no_grad():
+                    reference_logits = _response_logits(
+                        reference_model,
+                        turn.student_prefix_ids,
+                        turn.response_ids,
+                        max_sequence_length,
+                    )
+                    reference_log_probs = torch.log_softmax(
+                        reference_logits.float(), dim=-1
+                    )
             privileged_log_probs = None
             if turn.privileged_prefix_ids is not None:
                 with torch.no_grad():
@@ -128,7 +142,16 @@ def optimize_replay_group(
                 ratios * advantage_tensor,
                 clipped * advantage_tensor,
             )
-            turn_grpo = -token_objective.sum() / (trajectory_token_count * group_size)
+            token_reference_kl = selected_log_probs.new_zeros(selected_log_probs.shape)
+            if reference_log_probs is not None:
+                token_reference_kl = (
+                    student_log_probs.exp()
+                    * (student_log_probs - reference_log_probs.detach())
+                ).sum(-1)
+            normalization = trajectory_token_count * group_size
+            turn_grpo = -(
+                token_objective - beta * token_reference_kl
+            ).sum() / normalization
 
             turn_opsd = selected_log_probs.new_zeros(())
             if privileged_log_probs is not None:
@@ -143,6 +166,9 @@ def optimize_replay_group(
                 raise FloatingPointError("non-finite MAPD loss")
             turn_loss.backward()
             grpo_value += float(turn_grpo.detach().cpu())
+            reference_kl_value += float(
+                (token_reference_kl.sum() / normalization).detach().cpu()
+            )
             opsd_value += float(turn_opsd.detach().cpu())
 
     parameters = [parameter for _, parameter in trainable]
@@ -161,6 +187,7 @@ def optimize_replay_group(
 
     loss = LossBreakdown(
         grpo=grpo_value,
+        reference_kl=reference_kl_value,
         opsd=opsd_value,
         total=grpo_value + lambda_opsd * opsd_value,
         mean_reward=sum(item.reward for item in trajectories) / group_size,

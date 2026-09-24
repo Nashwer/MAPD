@@ -1,3 +1,5 @@
+import copy
+
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -86,3 +88,30 @@ def test_single_device_step_updates_and_reloads_checkpoint(tmp_path):
         model.embedding.weight.zero_()
     assert load_smoke_checkpoint(checkpoint, model, optimizer) == 1
     assert torch.equal(model.embedding.weight, expected)
+
+
+def test_single_device_step_applies_frozen_reference_policy_kl():
+    torch.manual_seed(11)
+    model = TinyModel()
+    reference_model = copy.deepcopy(model)
+    with torch.no_grad():
+        reference_model.output.weight[0].add_(2.0)
+    reference_model.requires_grad_(False)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    sample = QASample(id="q1", question="Where?", answers=["Paris"])
+    trajectories = [_trajectory(1.0, [3, 4]), _trajectory(0.0, [5, 6])]
+
+    result = optimize_replay_group(
+        model,
+        TinyTokenizer(),
+        optimizer,
+        sample,
+        trajectories,
+        None,
+        reference_model=reference_model,
+        beta=0.1,
+        max_sequence_length=16,
+    )
+
+    assert result.loss.reference_kl > 0
+    assert all(parameter.grad is None for parameter in reference_model.parameters())

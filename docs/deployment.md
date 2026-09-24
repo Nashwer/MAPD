@@ -374,17 +374,27 @@ bash mapd.sh protocol-train-status
 bash mapd.sh protocol-train-logs
 ```
 
-The command first performs two real Qwen rollouts per example against the
-wiki-18 HTTP retriever. Every accepted trajectory must begin with a model
-`search` action, contain an environment-owned `information` observation, and
-end with one model `answer` action. Model-generated `information`, multiple
-actions in one response, invalid actions, and answer-only trajectories fail the
-run instead of being counted as retrieval. Rollouts are checkpointed after every example and are
-reused when the command is restarted with the same model and settings. It then
-loads the train model once and runs one single-device update per usable
-example. Quality-gate-passed protocols supply protocol PI. Rejected protocols
-may use a correct student rollout as fallback; a rejected example with neither
-PI nor nonzero group-relative advantage is recorded and skipped.
+The command performs the paper's group size of eight real Qwen rollouts per
+example against the wiki-18 HTTP retriever. Retrieval is optional, as in the
+paper: a single-hop item may be answered directly, while the prompt tells the
+agent to keep issuing follow-up searches for unresolved multi-hop relations.
+With four interaction turns, a trajectory can make up to three searches before
+its final answer. Every search must contain an environment-owned `information`
+observation. Model-generated `information`, multiple actions in one response,
+and invalid actions fail the run. Rollouts are checkpointed after every example
+and are reused when the command is restarted with the same model and settings.
+It then loads the train model and a frozen reference model and runs one
+single-device update per usable example. The objective includes clipped GRPO,
+the reference-policy KL term, and OPSD. Quality-gate-passed protocols supply
+protocol PI. Rejected protocols may use a correct student rollout as fallback;
+a rejected example with neither PI nor nonzero group-relative advantage is
+recorded and skipped.
+
+The paper does not disclose the clipping epsilon, reference-KL coefficient, or
+rollout temperature. The runner records the explicit reproduction choices
+`epsilon=0.2`, `beta=0.001`, and `temperature=1.0` in its manifests; the latter
+two follow the public Search-R1 training recipe rather than being claimed as
+hidden MAPD hyperparameters.
 
 This is a small functional acceptance run: it trains only the final decoder
 layer and is not the paper's distributed 8-GPU run. Success ends with
@@ -392,10 +402,23 @@ layer and is not the paper's distributed 8-GPU run. Success ends with
 with:
 
 ```bash
-cat artifacts/protocol_train_smoke/offset_0_count_20_r8_action_v2/manifest.json
-cat artifacts/protocol_train_smoke/offset_0_count_20_r8_action_v2/steps.json
+cat artifacts/protocol_train_smoke/offset_0_count_20_r8_action_v3/manifest.json
+cat artifacts/protocol_train_smoke/offset_0_count_20_r8_action_v3/steps.json
 ```
 
 The final checkpoint is written to
-`artifacts/protocol_train_smoke/offset_0_count_20_r8_action_v2/checkpoint-final/checkpoint.pt`
+`artifacts/protocol_train_smoke/offset_0_count_20_r8_action_v3/checkpoint-final/checkpoint.pt`
 and is reloaded before the command reports success.
+
+To isolate agent tool-use behavior from the sampled NQ/HotpotQA shard, run the
+three explicitly multi-hop examples from Appendix A of the paper:
+
+```bash
+bash mapd.sh paper-examples-start
+bash mapd.sh paper-examples-status
+bash mapd.sh paper-examples-logs
+cat artifacts/paper_examples_action_v3/manifest.json
+```
+
+The manifest reports every trajectory's search depth and strict-EM reward, plus
+the aggregate number of trajectories that made at least two searches.

@@ -13,6 +13,9 @@ from mapd.reward.exact_match import exact_match
 
 AGENT_SYSTEM_PROMPT = """Answer the question by reasoning and using the search tool when needed.
 Issue a query as <search>query</search>. The environment will return <information>...</information>.
+After each observation, decide whether every relation in the question has been resolved.
+For multi-hop questions, issue follow-up searches using entities discovered in earlier observations.
+You may use multiple search actions before answering; do not guess while an evidence hop is unresolved.
 When ready, finish with <answer>short answer</answer>.
 Emit exactly one action per response and stop immediately after its closing tag.
 Never generate or imitate an <information> block; only the environment may provide it.
@@ -63,6 +66,8 @@ class AgenticSearchEnvironment:
     def rollout(
         self, sample: QASample, policy: StudentPolicy, *, max_new_tokens: int = 512
     ) -> AgentTrajectory:
+        if max_new_tokens < 1:
+            raise ValueError("max_new_tokens must be positive")
         messages = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": sample.question},
@@ -71,8 +76,11 @@ class AgenticSearchEnvironment:
         final_answer: str | None = None
         terminated = False
         searched = False
+        remaining_response_tokens = max_new_tokens
         for turn_index in range(1, self.max_turns + 1):
-            output = policy.generate(messages, max_new_tokens)
+            if remaining_response_tokens <= 0:
+                break
+            output = policy.generate(messages, remaining_response_tokens)
             token_ids = getattr(policy, "last_token_ids", None)
             token_log_probs = getattr(policy, "last_token_log_probs", None)
             trace = {
@@ -81,6 +89,8 @@ class AgenticSearchEnvironment:
                     list(token_log_probs) if token_log_probs is not None else None
                 ),
             }
+            if token_ids is not None:
+                remaining_response_tokens -= len(token_ids)
             action = parse_action(output)
             if action.kind == "answer" and self.require_search and not searched:
                 action = ParsedAction("invalid")

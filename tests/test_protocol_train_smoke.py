@@ -73,6 +73,10 @@ def test_protocol_training_requires_real_environment_owned_search_observation():
     assert not _is_verified_tool_trajectory(fabricated)
 
 
+def test_protocol_training_allows_paper_style_optional_direct_answer():
+    assert _is_verified_tool_trajectory(_trajectory("sample-1"))
+
+
 @pytest.fixture
 def valid_artifact() -> SynthesisArtifact:
     return SynthesisArtifact.model_validate(

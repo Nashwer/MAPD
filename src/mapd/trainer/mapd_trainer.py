@@ -13,6 +13,7 @@ from mapd.trainer.opsd import PrivilegedInformation, reverse_kl, select_privileg
 @dataclass(frozen=True)
 class LossBreakdown:
     grpo: float
+    reference_kl: float
     opsd: float
     total: float
     mean_reward: float
@@ -45,6 +46,17 @@ def compute_mapd_loss(
         clip_high=clip_high,
         beta=beta,
     )
+    trajectory_reference_kls = []
+    for rollout in group:
+        active = [
+            reference_kl
+            for reference_kl, enabled in zip(
+                rollout.reference_token_kls, rollout.action_mask
+            )
+            if enabled
+        ]
+        trajectory_reference_kls.append(sum(active) / len(active) if active else 0.0)
+    reference_kl = sum(trajectory_reference_kls) / len(trajectory_reference_kls)
     distillation = []
     for rollout in group:
         if rollout.privileged_log_distributions is None:
@@ -59,6 +71,7 @@ def compute_mapd_loss(
     opsd_loss = sum(distillation) / len(distillation) if distillation else 0.0
     return LossBreakdown(
         grpo=rl_loss,
+        reference_kl=reference_kl,
         opsd=opsd_loss,
         total=rl_loss + lambda_opsd * opsd_loss,
         mean_reward=sum(item.reward for item in group) / len(group),

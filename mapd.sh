@@ -48,6 +48,8 @@ Commands:
   protocol-merge BUNDLE...  Merge and de-duplicate exported protocol bundles
   protocol-train-smoke OFFSET COUNT  Train on one real protocol shard and reload checkpoint
   protocol-train-start/status/logs/stop  Manage the real-protocol training smoke job
+  paper-examples  Run Appendix A's three multi-hop examples through Qwen + wiki-18
+  paper-examples-start/status/logs/stop  Manage the paper-example smoke job
   model-smoke  Load the local Qwen model and run one GPU inference
   agent-smoke  Run one real Qwen -> BM25 search -> answer trajectory
   train-smoke  Run rollout, dual-context MAPD update, and checkpoint reload
@@ -225,7 +227,7 @@ case ${1:-} in
       echo "retriever is not healthy; run: bash mapd.sh retrieval-start" >&2
       exit 1
     fi
-    OUTPUT_DIR="$PROJECT_ROOT/artifacts/protocol_train_smoke/offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}_action_v2"
+    OUTPUT_DIR="$PROJECT_ROOT/artifacts/protocol_train_smoke/offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}_action_v3"
     "$VERL_VENV/bin/python" scripts/protocol_train_smoke_rollout.py \
       --model "$MODEL_PATH" \
       --artifacts "$SHARD_DIR/artifacts.jsonl" \
@@ -252,6 +254,31 @@ case ${1:-} in
     ;;
   protocol-train-stop)
     bash "$PROJECT_ROOT/scripts/jobctl.sh" stop protocol-train-smoke
+    ;;
+  paper-examples)
+    cd "$PROJECT_ROOT"
+    MODEL_PATH=${2:-${MAPD_MODEL_PATH:-"$HOME/models/Qwen3-1.7B"}}
+    if ! curl -fsS --connect-timeout 1 --max-time 3 http://127.0.0.1:8000/health >/dev/null; then
+      echo "retriever is not healthy; run: bash mapd.sh retrieval-start" >&2
+      exit 1
+    fi
+    "$VERL_VENV/bin/python" scripts/paper_examples_smoke.py \
+      --model "$MODEL_PATH" \
+      --retriever-url "${MAPD_RETRIEVER_URL:-http://127.0.0.1:8000/retrieve}"
+    ;;
+  paper-examples-start)
+    MODEL_PATH=${2:-${MAPD_MODEL_PATH:-"$HOME/models/Qwen3-1.7B"}}
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" start paper-examples \
+      bash "$PROJECT_ROOT/mapd.sh" paper-examples "$MODEL_PATH"
+    ;;
+  paper-examples-status)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" status paper-examples
+    ;;
+  paper-examples-logs)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" logs paper-examples 200
+    ;;
+  paper-examples-stop)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" stop paper-examples
     ;;
   model-smoke)
     cd "$PROJECT_ROOT"

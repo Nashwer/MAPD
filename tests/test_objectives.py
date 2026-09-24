@@ -26,6 +26,26 @@ def test_group_advantages_and_joint_loss_match_equations():
     )
     result = compute_mapd_loss([_rollout(1.0), _rollout(0.0)], lambda_opsd=0.05)
     assert result.grpo == pytest.approx(0.0)
+    assert result.reference_kl == pytest.approx(0.0)
     assert result.opsd == pytest.approx(expected_kl)
     assert result.total == pytest.approx(0.05 * expected_kl)
     assert result.distillation_tokens == 2
+
+
+def test_grpo_includes_the_paper_reference_policy_kl_penalty():
+    positive = _rollout(1.0)
+    negative = _rollout(0.0)
+    positive = RolloutLossInput(
+        **{**positive.__dict__, "reference_token_kls": [0.4]}
+    )
+    negative = RolloutLossInput(
+        **{**negative.__dict__, "reference_token_kls": [0.2]}
+    )
+
+    result = compute_mapd_loss(
+        [positive, negative], beta=0.1, lambda_opsd=0.0
+    )
+
+    assert result.reference_kl == pytest.approx(0.3)
+    assert result.grpo == pytest.approx(0.03)
+    assert result.total == pytest.approx(0.03)

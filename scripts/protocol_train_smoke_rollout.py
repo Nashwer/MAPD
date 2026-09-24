@@ -18,7 +18,7 @@ from mapd.mas.schema import SynthesisArtifact
 from mapd.retrieval.retriever_server import HTTPRetriever
 
 
-RUN_SCHEMA = "mapd-protocol-train-rollout-v2"
+RUN_SCHEMA = "mapd-protocol-train-rollout-v3"
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,11 +29,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--artifacts", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--retriever-url", default="http://127.0.0.1:8000/retrieve")
-    parser.add_argument("--group-size", type=int, default=2)
-    parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--group-size", type=int, default=8)
+    parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int, default=3)
     parser.add_argument("--max-turns", type=int, default=4)
-    parser.add_argument("--max-new-tokens", type=int, default=192)
+    parser.add_argument("--max-prompt-length", type=int, default=4096)
+    parser.add_argument("--max-new-tokens", type=int, default=512)
     return parser.parse_args()
 
 
@@ -65,19 +66,17 @@ def main() -> int:
     policy = None
     environment = None
     if pending:
-        prompt = (
-            AGENT_SYSTEM_PROMPT
-            + "\nFor this MAPD training run, begin with one <search>query</search> action. "
-            "Use the returned passages and finish with one <answer>short answer</answer>."
+        policy = VLLMStudentPolicy.from_model(
+            args.model,
+            max_model_len=args.max_prompt_length + args.max_new_tokens,
         )
-        policy = VLLMStudentPolicy.from_model(args.model)
         policy.temperature = args.temperature
         environment = AgenticSearchEnvironment(
             HTTPRetriever(args.retriever_url, timeout_seconds=120),
             top_k=args.top_k,
             max_turns=args.max_turns,
-            system_prompt=prompt,
-            require_search=True,
+            system_prompt=AGENT_SYSTEM_PROMPT,
+            require_search=False,
         )
 
     for artifact in pending:
@@ -108,6 +107,10 @@ def main() -> int:
                     "example_id": artifact.sample.id,
                     "protocol_passed": artifact.quality.passed,
                     "rewards": [item.reward for item in group],
+                    "search_depths": [
+                        sum(turn.action == "search" for turn in item.turns)
+                        for item in group
+                    ],
                 },
                 ensure_ascii=False,
             ),
@@ -124,8 +127,30 @@ def main() -> int:
                 "mixed_reward_groups": sum(
                     len({item.reward for item in group}) > 1 for group in completed.values()
                 ),
+                "verified_agent_trajectories": sum(
+                    _is_verified_tool_trajectory(item)
+                    for group in completed.values()
+                    for item in group
+                ),
                 "verified_tool_trajectories": sum(
                     _is_verified_tool_trajectory(item)
+                    and any(turn.action == "search" for turn in item.turns)
+                    for group in completed.values()
+                    for item in group
+                ),
+                "search_turns": sum(
+                    turn.action == "search"
+                    for group in completed.values()
+                    for item in group
+                    for turn in item.turns
+                ),
+                "multi_search_trajectories": sum(
+                    sum(turn.action == "search" for turn in item.turns) >= 2
+                    for group in completed.values()
+                    for item in group
+                ),
+                "direct_answer_trajectories": sum(
+                    all(turn.action != "search" for turn in item.turns)
                     for group in completed.values()
                     for item in group
                 ),
@@ -150,8 +175,9 @@ def _run_config(args: argparse.Namespace) -> dict[str, Any]:
         "temperature": args.temperature,
         "top_k": args.top_k,
         "max_turns": args.max_turns,
+        "max_prompt_length": args.max_prompt_length,
         "max_new_tokens": args.max_new_tokens,
-        "require_search": True,
+        "require_search": False,
     }
 
 
@@ -200,8 +226,6 @@ def _validate_group(
 def _is_verified_tool_trajectory(trajectory: AgentTrajectory) -> bool:
     if not trajectory.terminated or trajectory.final_answer is None or not trajectory.turns:
         return False
-    if trajectory.turns[0].action != "search":
-        return False
     if trajectory.turns[-1].action != "answer":
         return False
     if any(turn.action == "invalid" for turn in trajectory.turns):
@@ -209,7 +233,7 @@ def _is_verified_tool_trajectory(trajectory: AgentTrajectory) -> bool:
     if any("<information>" in turn.model_output.lower() for turn in trajectory.turns):
         return False
     search_turns = [turn for turn in trajectory.turns if turn.action == "search"]
-    return bool(search_turns) and all(
+    return all(
         turn.query and turn.observation and turn.observation.startswith("<information>")
         for turn in search_turns
     )
@@ -228,8 +252,14 @@ def _write_manifest(
         "completed_examples": len(completed),
         "completed_ids": [item.sample.id for item in artifacts if item.sample.id in completed],
         "trajectory_count": sum(len(group) for group in completed.values()),
+        "verified_agent_trajectories": sum(
+            _is_verified_tool_trajectory(trajectory)
+            for group in completed.values()
+            for trajectory in group
+        ),
         "verified_tool_trajectories": sum(
             _is_verified_tool_trajectory(trajectory)
+            and any(turn.action == "search" for turn in trajectory.turns)
             for group in completed.values()
             for trajectory in group
         ),
@@ -238,6 +268,16 @@ def _write_manifest(
             for group in completed.values()
             for trajectory in group
             for turn in trajectory.turns
+        ),
+        "multi_search_trajectories": sum(
+            sum(turn.action == "search" for turn in trajectory.turns) >= 2
+            for group in completed.values()
+            for trajectory in group
+        ),
+        "direct_answer_trajectories": sum(
+            all(turn.action != "search" for turn in trajectory.turns)
+            for group in completed.values()
+            for trajectory in group
         ),
         "rewards": {
             item.sample.id: [trajectory.reward for trajectory in completed[item.sample.id]]

@@ -23,10 +23,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/real_grpo_smoke"))
     parser.add_argument("--group-size", type=int, default=8)
     parser.add_argument("--candidate-limit", type=int, default=12)
-    parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int, default=3)
     parser.add_argument("--max-turns", type=int, default=4)
-    parser.add_argument("--max-new-tokens", type=int, default=192)
+    parser.add_argument("--max-prompt-length", type=int, default=4096)
+    parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
 
@@ -43,18 +44,16 @@ def main() -> int:
     random.Random(args.seed).shuffle(samples)
     candidates = samples[: args.candidate_limit]
 
-    prompt = (
-        AGENT_SYSTEM_PROMPT
-        + "\nFor this acceptance run, begin with one <search>query</search> action. "
-        "Use the returned passages, then finish with one <answer>short answer</answer>."
+    policy = VLLMStudentPolicy.from_model(
+        args.model,
+        max_model_len=args.max_prompt_length + args.max_new_tokens,
     )
-    policy = VLLMStudentPolicy.from_model(args.model)
     policy.temperature = args.temperature
     environment = AgenticSearchEnvironment(
         HTTPRetriever(args.retriever_url, timeout_seconds=120),
         top_k=args.top_k,
         max_turns=args.max_turns,
-        system_prompt=prompt,
+        system_prompt=AGENT_SYSTEM_PROMPT,
         require_search=True,
     )
 

@@ -8,6 +8,7 @@ htmlcov/
 .env
 artifacts/
 .run/
+.tmp/
 logs/
 data/**
 !data/README.md
