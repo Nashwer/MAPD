@@ -108,7 +108,7 @@ Each synthesis run writes:
 artifacts.jsonl      complete SynthesisArtifact records
 explorations.jsonl   subtask DAGs, queries, passages, findings and repair audit
 protocols.jsonl      validated protocol or rejected raw protocol
-quality.jsonl        six deterministic admission checks
+quality.jsonl        four paper-defined deterministic admission checks
 training.jsonl       veRL-style prompt/reward/PI records
 manifest.json        schema version, config hash, counts and cache hits
 online_smoke.json    CPU mock rollout/reward/PI/loss integration trace
@@ -116,6 +116,13 @@ online_smoke.json    CPU mock rollout/reward/PI/loss integration trace
 
 Malformed protocol JSON is retained as `raw_protocol`, marked as a schema failure, and routed to online
 self-rollout fallback rather than crashing synthesis.
+
+The protocol schema follows Section 3.1 and Appendix A of the paper exactly.
+A Succeeded Protocol contains `task_type`, `reasoning_plan`,
+`grounding_facts`, `answer`, and `answer_grounded=true`. An Evidence Protocol
+omits `answer`, adds `partial_findings`, and sets `answer_grounded=false`.
+Outer wrappers, extra metadata fields, object-valued plan steps or grounding
+facts, and explicit null placeholders for omitted variant fields are rejected.
 
 ## 5. Verified execution boundary
 

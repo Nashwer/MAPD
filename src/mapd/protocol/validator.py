@@ -12,6 +12,8 @@ def validate_protocol(
     sample: QASample,
     exploration: ExplorationLog,
     protocol: StructuredProtocol | None,
+    *,
+    schema_errors: list[str] | None = None,
 ) -> QualityReport:
     if protocol is None:
         return QualityReport(
@@ -22,10 +24,8 @@ def validate_protocol(
                 "em_consistency": False,
                 "extractive_grounding": False,
                 "no_answer_leak": False,
-                "grounded_flag": False,
-                "variant_shape": False,
             },
-            errors=["protocol failed schema validation"],
+            errors=["protocol failed schema validation", *(schema_errors or [])],
             pi_source="self_rollout_fallback",
         )
 
@@ -50,18 +50,6 @@ def validate_protocol(
     if not checks["no_answer_leak"]:
         errors.append("answer leakage detected in reasoning plan or retrieval query")
 
-    checks["grounded_flag"] = protocol.answer_grounded == exploration.success
-    if not checks["grounded_flag"]:
-        errors.append("answer_grounded does not match exploration success")
-
-    checks["variant_shape"] = bool(protocol.grounding_facts) and (
-        protocol.partial_findings is None
-        if exploration.success
-        else bool(protocol.partial_findings) and protocol.answer is None
-    )
-    if not checks["variant_shape"]:
-        errors.append("protocol does not match the succeeded/evidence variant contract")
-
     passed = all(checks.values())
     return QualityReport(
         example_id=sample.id,
@@ -70,4 +58,3 @@ def validate_protocol(
         errors=errors,
         pi_source="protocol" if passed else "self_rollout_fallback",
     )
-

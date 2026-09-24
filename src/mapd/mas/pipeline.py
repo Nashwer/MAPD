@@ -93,8 +93,10 @@ class MASPipeline:
             search_rounds=search_rounds,
             repair_rounds=repair_rounds,
         )
-        protocol, raw_protocol = self.protocolizer.generate(exploration)
-        quality = validate_protocol(sample, exploration, protocol)
+        protocol, raw_protocol, schema_errors = self.protocolizer.generate(exploration)
+        quality = validate_protocol(
+            sample, exploration, protocol, schema_errors=schema_errors
+        )
         return SynthesisArtifact(
             sample=sample,
             exploration=exploration,
@@ -152,4 +154,3 @@ class MASPipeline:
         )
         answer = result.get("answer")
         return str(answer).strip() if answer is not None else None
-

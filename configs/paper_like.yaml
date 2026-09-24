@@ -15,7 +15,7 @@ teacher:
   # Protocolizer responses contain several structured fields and can exceed
   # 2K tokens even in non-thinking mode. This remains only a ceiling; concise
   # role prompts keep ordinary responses much shorter.
-  max_output_tokens: 4096
+  max_output_tokens: 8192
   budget_usd: ${MAPD_TEACHER_BUDGET_USD:-5.0}
   # Conservative DeepSeek Flash peak-hour cache-miss prices (USD / 1M tokens).
   input_price_per_million: 0.30

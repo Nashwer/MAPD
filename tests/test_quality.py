@@ -25,7 +25,14 @@ def test_quality_gate_accepts_grounded_protocol():
         answer="Paris",
         answer_grounded=True,
     )
-    assert validate_protocol(sample, exploration, protocol).passed
+    report = validate_protocol(sample, exploration, protocol)
+    assert report.passed
+    assert set(report.checks) == {
+        "schema",
+        "em_consistency",
+        "extractive_grounding",
+        "no_answer_leak",
+    }
 
 
 def test_quality_gate_rejects_plan_answer_leak():

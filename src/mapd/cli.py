@@ -32,7 +32,7 @@ from mapd.trainer.opsd import select_privileged_information
 
 app = typer.Typer(no_args_is_help=True, help="MAPD reproduction utilities")
 ARTIFACT_SCHEMA_VERSION = 2
-SYNTHESIS_REVISION = 6
+SYNTHESIS_REVISION = 7
 
 
 def _build_teacher(

@@ -40,10 +40,22 @@ ROLE_INSTRUCTIONS = {
         "and dependency-aware subtasks without putting the answer in objectives or queries."
     ),
     "protocolizer": (
-        "Create a style-normalized MAPD protocol. Grounding facts must be verbatim passage substrings; "
-        "the plan must be prospective and contain no answer or hindsight. Use 2-6 concise reasoning steps. "
-        "Include at most 5 grounding facts, each a continuous passage excerpt of at most 300 characters. "
-        "Keep partial_findings under 500 characters and keep the answer as short as possible."
+        "Convert the exploration log into the paper's Structured JSON Protocol. Output the protocol "
+        "object itself, with no outer protocol/data/result/schema/type wrapper and no extra fields. "
+        "task_type must be one of single_hop, multi_hop, comparison, others. reasoning_plan must be an "
+        "ordered array of actionable sub-goal strings with no final outcome, answer, or hindsight. "
+        "grounding_facts must be an array of strings copied verbatim from retrieved passages. "
+        "Copy the input task_type exactly. For a succeeded protocol, copy candidate_answer exactly. "
+        "The example strings below show the required JSON types and must be replaced with input-derived values. "
+        "If success=true, output exactly: "
+        '{"task_type":"multi_hop","reasoning_plan":["Search for the first entity.","Use it to find the requested fact."],'
+        '"grounding_facts":["A verbatim retrieved passage substring."],"answer":"short verified answer",'
+        '"answer_grounded":true}. Do not output partial_findings. '
+        "If success=false, output exactly: "
+        '{"task_type":"multi_hop","reasoning_plan":["Search for the first entity.","Find the missing relation."],'
+        '"grounding_facts":["A verbatim retrieved passage substring."],'
+        '"partial_findings":"Confirmed the supported facts, but reliable evidence for the missing fact is absent.",'
+        '"answer_grounded":false}. Do not output answer.'
     ),
 }
 
@@ -115,17 +127,22 @@ class MockTeacher:
             return {"failure_type": "search", "diagnosis": "No additional mock query available.", "subtasks": []}
         if role == "protocolizer":
             success = payload["success"]
-            return {
+            protocol = {
                 "task_type": payload["task_type"],
                 "reasoning_plan": [
                     "Search for evidence relevant to each entity in the question.",
                     "Cross-check the retrieved evidence and derive the requested answer.",
                 ],
                 "grounding_facts": [item["contents"] for item in payload["passages"][:3]],
-                "partial_findings": None if success else "Relevant evidence was retrieved, but the answer was not verified.",
-                "answer": payload["candidate_answer"] if success else None,
                 "answer_grounded": success,
             }
+            if success:
+                protocol["answer"] = payload["candidate_answer"]
+            else:
+                protocol["partial_findings"] = (
+                    "Relevant evidence was retrieved, but the answer was not verified."
+                )
+            return protocol
         raise ValueError(f"Unsupported mock teacher role: {role}")
 
 

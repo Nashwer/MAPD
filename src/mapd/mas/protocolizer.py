@@ -13,7 +13,9 @@ class Protocolizer:
     def __init__(self, teacher: TeacherClient):
         self.teacher = teacher
 
-    def generate(self, exploration: ExplorationLog) -> tuple[StructuredProtocol | None, dict[str, Any]]:
+    def generate(
+        self, exploration: ExplorationLog
+    ) -> tuple[StructuredProtocol | None, dict[str, Any], list[str]]:
         unique_passages: dict[str, dict[str, Any]] = {}
         for search in exploration.searches:
             for passage in search.passages:
@@ -31,7 +33,10 @@ class Protocolizer:
             },
         )
         try:
-            return StructuredProtocol.model_validate(raw), raw
-        except ValidationError:
-            return None, raw
-
+            return StructuredProtocol.model_validate(raw), raw, []
+        except ValidationError as exc:
+            errors = []
+            for item in exc.errors(include_url=False, include_input=False):
+                location = ".".join(str(part) for part in item["loc"]) or "protocol"
+                errors.append(f"schema {location}: {item['msg']}")
+            return None, raw, errors
