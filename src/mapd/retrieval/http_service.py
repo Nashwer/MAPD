@@ -80,8 +80,9 @@ def serve_retriever(
     port: int = 8000,
     default_top_k: int = 3,
 ) -> None:
+    retriever = SQLiteFTSRetriever(index_path)
     server = RetrievalHTTPServer((host, port), RetrievalHandler)
-    server.retriever = SQLiteFTSRetriever(index_path)
+    server.retriever = retriever
     server.default_top_k = default_top_k
     print(
         f"retriever ready: http://{host}:{port}/retrieve "

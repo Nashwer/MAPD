@@ -117,8 +117,15 @@ class SQLiteFTSRetriever:
         if not self.index_path.is_file():
             raise FileNotFoundError(self.index_path)
         with self._connect() as connection:
-            row = connection.execute("SELECT COUNT(*) FROM passages").fetchone()
-            self.document_count = int(row[0])
+            row = connection.execute(
+                "SELECT value FROM metadata WHERE key = 'documents'"
+            ).fetchone()
+            if row is not None:
+                self.document_count = int(json.loads(row[0]))
+            else:
+                # Compatibility fallback for indexes built before metadata v1.
+                row = connection.execute("SELECT COUNT(*) FROM passages").fetchone()
+                self.document_count = int(row[0])
         if self.document_count < 1:
             raise ValueError("retrieval index contains no documents")
 

@@ -91,7 +91,7 @@ case ${1:-} in
       "$VERL_VENV/bin/python" "$PROJECT_ROOT/scripts/serve_retriever.py" \
       --index "$PROJECT_ROOT/data/wiki18/index/wiki18.sqlite3"
     for _ in {1..30}; do
-      if curl -fsS http://127.0.0.1:8000/health; then
+      if curl -fsS --connect-timeout 1 --max-time 2 http://127.0.0.1:8000/health; then
         echo
         exit 0
       fi
