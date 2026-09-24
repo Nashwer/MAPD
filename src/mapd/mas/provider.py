@@ -41,7 +41,9 @@ ROLE_INSTRUCTIONS = {
     ),
     "protocolizer": (
         "Create a style-normalized MAPD protocol. Grounding facts must be verbatim passage substrings; "
-        "the plan must be prospective and contain no answer or hindsight."
+        "the plan must be prospective and contain no answer or hindsight. Use 2-6 concise reasoning steps. "
+        "Include at most 5 grounding facts, each a continuous passage excerpt of at most 300 characters. "
+        "Keep partial_findings under 500 characters and keep the answer as short as possible."
     ),
 }
 
@@ -220,8 +222,16 @@ class OpenAICompatibleTeacher:
                 )
                 response.raise_for_status()
                 response_payload = response.json()
-                content = response_payload["choices"][0]["message"]["content"]
+                choice = response_payload["choices"][0]
+                content = choice["message"]["content"]
                 self._record_usage(role, response_payload.get("usage"))
+                if choice.get("finish_reason") == "length":
+                    raise RuntimeError(
+                        f"teacher response role={role} was truncated "
+                        f"(finish_reason=length, content_chars={len(content)}, "
+                        f"max_tokens={body.get('max_tokens')}); increase the output "
+                        "limit or constrain the role response"
+                    )
                 return _decode_json_object(content)
             except httpx.HTTPStatusError as exc:
                 error = RuntimeError(

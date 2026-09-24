@@ -103,3 +103,42 @@ def test_deepseek_teacher_reports_400_body_without_retrying_or_leaking_key(
     assert "super-secret-key" not in message
     system_prompt = requests[0][1]["json"]["messages"][0]["content"]
     assert "JSON" in system_prompt
+
+
+def test_deepseek_teacher_reports_truncated_response_without_retrying(monkeypatch):
+    requests = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {"content": '{"answer": "unfinished'},
+                        "finish_reason": "length",
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 2048},
+            }
+
+    def fake_post(url, **kwargs):
+        requests.append((url, kwargs))
+        return Response()
+
+    monkeypatch.setenv("TEST_DEEPSEEK_KEY", "secret")
+    monkeypatch.setattr("mapd.mas.provider.httpx.post", fake_post)
+    teacher = OpenAICompatibleTeacher(
+        model="deepseek-flash",
+        base_url="https://api.deepseek.com",
+        api_key_env="TEST_DEEPSEEK_KEY",
+        timeout_seconds=10,
+        max_retries=5,
+        max_output_tokens=2048,
+    )
+
+    with pytest.raises(RuntimeError, match=r"role=protocolizer was truncated"):
+        teacher.generate_json("protocolizer", {"passages": []})
+
+    assert len(requests) == 1
