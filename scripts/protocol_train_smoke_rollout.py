@@ -18,7 +18,7 @@ from mapd.mas.schema import SynthesisArtifact
 from mapd.retrieval.retriever_server import HTTPRetriever
 
 
-RUN_SCHEMA = "mapd-protocol-train-rollout-v3"
+RUN_SCHEMA = "mapd-protocol-train-rollout-v4"
 
 
 def parse_args() -> argparse.Namespace:
@@ -216,7 +216,7 @@ def _validate_group(
             raise ValueError("rollout group contains multiple example ids")
         if not _is_verified_tool_trajectory(trajectory):
             raise RuntimeError(
-                f"example {example_id!r} did not produce a strict search-observation-answer trajectory"
+                f"example {example_id!r} produced an invalid agent trajectory"
             )
         for turn in trajectory.turns:
             if turn.token_ids is None or turn.token_log_probs is None:
@@ -224,9 +224,12 @@ def _validate_group(
 
 
 def _is_verified_tool_trajectory(trajectory: AgentTrajectory) -> bool:
-    if not trajectory.terminated or trajectory.final_answer is None or not trajectory.turns:
+    if not trajectory.turns:
         return False
-    if trajectory.turns[-1].action != "answer":
+    if trajectory.terminated:
+        if trajectory.final_answer is None or trajectory.turns[-1].action != "answer":
+            return False
+    elif trajectory.final_answer is not None or trajectory.turns[-1].action != "search":
         return False
     if any(turn.action == "invalid" for turn in trajectory.turns):
         return False
@@ -276,6 +279,16 @@ def _write_manifest(
         ),
         "direct_answer_trajectories": sum(
             all(turn.action != "search" for turn in trajectory.turns)
+            for group in completed.values()
+            for trajectory in group
+        ),
+        "answered_trajectories": sum(
+            trajectory.terminated and trajectory.final_answer is not None
+            for group in completed.values()
+            for trajectory in group
+        ),
+        "max_turn_exhausted_trajectories": sum(
+            not trajectory.terminated
             for group in completed.values()
             for trajectory in group
         ),

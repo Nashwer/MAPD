@@ -14,8 +14,11 @@ from mapd.reward.exact_match import exact_match
 AGENT_SYSTEM_PROMPT = """Answer the question by reasoning and using the search tool when needed.
 Issue a query as <search>query</search>. The environment will return <information>...</information>.
 After each observation, decide whether every relation in the question has been resolved.
-For multi-hop questions, issue follow-up searches using entities discovered in earlier observations.
+For multi-hop questions, search one unresolved relation at a time instead of copying the full question.
+Issue follow-up searches using concrete entities discovered in earlier observations.
+Never repeat an earlier query; reformulate it to obtain new evidence.
 You may use multiple search actions before answering; do not guess while an evidence hop is unresolved.
+Reserve the final interaction turn for an answer. The environment will warn you when one turn remains.
 When ready, finish with <answer>short answer</answer>.
 Emit exactly one action per response and stop immediately after its closing tag.
 Never generate or imitate an <information> block; only the environment may provide it.
@@ -26,6 +29,16 @@ INVALID_ACTION_CORRECTION = (
     "Your previous response was invalid. Emit exactly one complete "
     "<search>query</search> or <answer>short answer</answer> action, then stop. "
     "Never emit <information>; that tag belongs to the environment."
+)
+
+REPEATED_QUERY_GUIDANCE = (
+    "That query repeats an earlier search and adds no new evidence. On the next turn, "
+    "use a different query built from a concrete entity in the observations."
+)
+
+FINAL_TURN_GUIDANCE = (
+    "Only one interaction turn remains. Do not search again. Use the available evidence "
+    "and emit exactly one <answer>short answer</answer> action."
 )
 
 
@@ -76,6 +89,7 @@ class AgenticSearchEnvironment:
         final_answer: str | None = None
         terminated = False
         searched = False
+        normalized_queries: set[str] = set()
         remaining_response_tokens = max_new_tokens
         for turn_index in range(1, self.max_turns + 1):
             if remaining_response_tokens <= 0:
@@ -109,7 +123,19 @@ class AgenticSearchEnvironment:
                 break
             if action.kind == "search":
                 query = action.value or ""
-                observation = format_observation(self.retriever.search(query, self.top_k) if query else [])
+                normalized_query = " ".join(query.casefold().split())
+                repeated_query = normalized_query in normalized_queries
+                normalized_queries.add(normalized_query)
+                observation = format_observation(
+                    self.retriever.search(query, self.top_k) if query else []
+                )
+                guidance = []
+                if repeated_query:
+                    guidance.append(REPEATED_QUERY_GUIDANCE)
+                if turn_index == self.max_turns - 1:
+                    guidance.append(FINAL_TURN_GUIDANCE)
+                if guidance:
+                    observation += "\n\n" + "\n".join(guidance)
                 searched = True
                 turns.append(
                     AgentTurn(
@@ -128,18 +154,22 @@ class AgenticSearchEnvironment:
                     ]
                 )
                 continue
+            correction = INVALID_ACTION_CORRECTION
+            if turn_index == self.max_turns - 1:
+                correction += "\n\n" + FINAL_TURN_GUIDANCE
             turns.append(
                 AgentTurn(
                     turn_index=turn_index,
                     model_output=output,
                     action="invalid",
+                    observation=correction,
                     **trace,
                 )
             )
             messages.extend(
                 [
                     {"role": "assistant", "content": output},
-                    {"role": "user", "content": INVALID_ACTION_CORRECTION},
+                    {"role": "user", "content": correction},
                 ]
             )
         return AgentTrajectory(

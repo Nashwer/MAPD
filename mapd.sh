@@ -44,6 +44,8 @@ Commands:
   protocol-shard OFFSET COUNT  Generate one deterministic resumable shard
   protocol-start/status/logs/stop  Manage a protocol shard background job
   protocol-export OFFSET COUNT  Create a checksummed portable shard bundle
+  shallow-trace-export [ROLLOUTS] [ID]  Export one failed shallow-search trace for review
+  review-traces-export OFFSET COUNT  Export two teacher negatives plus one student negative
   protocol-restore BUNDLE  Restore a bundle to its original artifact directory
   protocol-merge BUNDLE...  Merge and de-duplicate exported protocol bundles
   protocol-train-smoke OFFSET COUNT  Train on one real protocol shard and reload checkpoint
@@ -196,6 +198,30 @@ case ${1:-} in
       --offset "$OFFSET" \
       --count "$COUNT"
     ;;
+  shallow-trace-export)
+    cd "$PROJECT_ROOT"
+    TRACE_ARGS=()
+    [[ -z "${2:-}" ]] || TRACE_ARGS+=(--rollouts "$2")
+    [[ -z "${3:-}" ]] || TRACE_ARGS+=(--example-id "$3")
+    "$VERL_VENV/bin/python" scripts/export_shallow_trace.py \
+      --project-root "$PROJECT_ROOT" \
+      --output-root "$PROJECT_ROOT/exports" \
+      "${TRACE_ARGS[@]}"
+    ;;
+  review-traces-export)
+    cd "$PROJECT_ROOT"
+    OFFSET=${2:-0}
+    COUNT=${3:-20}
+    [[ "$OFFSET" =~ ^[0-9]+$ && "$COUNT" =~ ^[1-9][0-9]*$ ]] || {
+      echo "OFFSET must be nonnegative and COUNT must be positive" >&2
+      exit 2
+    }
+    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}"
+    "$VERL_VENV/bin/python" scripts/export_review_traces.py \
+      --project-root "$PROJECT_ROOT" \
+      --artifacts "$SHARD_DIR/artifacts.jsonl" \
+      --output-root "$PROJECT_ROOT/exports"
+    ;;
   protocol-restore)
     cd "$PROJECT_ROOT"
     [[ -n "${2:-}" ]] || { echo "BUNDLE is required" >&2; exit 2; }
@@ -227,7 +253,7 @@ case ${1:-} in
       echo "retriever is not healthy; run: bash mapd.sh retrieval-start" >&2
       exit 1
     fi
-    OUTPUT_DIR="$PROJECT_ROOT/artifacts/protocol_train_smoke/offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}_action_v3"
+    OUTPUT_DIR="$PROJECT_ROOT/artifacts/protocol_train_smoke/offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}_action_v4"
     "$VERL_VENV/bin/python" scripts/protocol_train_smoke_rollout.py \
       --model "$MODEL_PATH" \
       --artifacts "$SHARD_DIR/artifacts.jsonl" \

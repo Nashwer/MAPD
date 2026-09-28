@@ -6,7 +6,7 @@ from typing import Any
 
 from mapd.data.schema import QASample
 from mapd.environment.schema import AgentTrajectory, AgentTurn
-from mapd.environment.search_env import AGENT_SYSTEM_PROMPT
+from mapd.environment.search_env import AGENT_SYSTEM_PROMPT, INVALID_ACTION_CORRECTION
 from mapd.trainer.opsd import PrivilegedInformation
 
 
@@ -125,5 +125,8 @@ def _append_turn(messages: list[dict[str, str]], turn: AgentTurn) -> None:
         )
     elif turn.action == "invalid":
         messages.append(
-            {"role": "user", "content": "Use one <search> or <answer> action."}
+            {
+                "role": "user",
+                "content": turn.observation or INVALID_ACTION_CORRECTION,
+            }
         )

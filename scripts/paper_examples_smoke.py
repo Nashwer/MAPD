@@ -66,7 +66,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument(
-        "--output-dir", type=Path, default=Path("artifacts/paper_examples_action_v3")
+        "--output-dir", type=Path, default=Path("artifacts/paper_examples_action_v4")
     )
     parser.add_argument("--retriever-url", default="http://127.0.0.1:8000/retrieve")
     parser.add_argument("--rollouts-per-example", type=int, default=4)
@@ -128,7 +128,7 @@ def main() -> int:
 
     total = len(trajectories)
     manifest = {
-        "schema": "mapd-paper-examples-smoke-v1",
+        "schema": "mapd-paper-examples-smoke-v2",
         "source": "MAPD paper Appendix A, Examples 2-4",
         "model": str(args.model.resolve()),
         "retriever_url": args.retriever_url,
@@ -140,6 +140,7 @@ def main() -> int:
         "max_new_tokens": args.max_new_tokens,
         "trajectories": total,
         "terminated": sum(item.terminated for item in trajectories),
+        "max_turn_exhausted": sum(not item.terminated for item in trajectories),
         "exact_match": sum(item.reward for item in trajectories),
         "multi_search_trajectories": sum(
             sum(turn.action == "search" for turn in item.turns) >= 2
