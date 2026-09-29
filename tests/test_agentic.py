@@ -137,3 +137,33 @@ def test_response_token_limit_is_shared_across_interaction_turns():
 
     assert policy.calls == [5, 3, 1]
     assert trajectory.reward == 1.0
+
+
+def test_privileged_context_is_visible_to_policy_but_not_public_prompt():
+    class RecordingPolicy:
+        last_token_ids = [1]
+        last_token_log_probs = [-0.1]
+
+        def __init__(self):
+            self.messages = None
+
+        def generate(self, messages, max_new_tokens):
+            del max_new_tokens
+            self.messages = messages
+            return "<answer>Paris</answer>"
+
+    sample = QASample(id="q1", question="Where?", answers=["Paris"])
+    policy = RecordingPolicy()
+    environment = AgenticSearchEnvironment(
+        BM25Retriever.from_jsonl("tests/fixtures/corpus.jsonl"), max_turns=1
+    )
+
+    trajectory = environment.rollout(
+        sample,
+        policy,
+        privileged_context="Privileged MAPD protocol (training only): PRIVATE",
+    )
+
+    assert policy.messages[1]["content"].endswith("PRIVATE")
+    assert trajectory.prompt == "Where?"
+    assert "PRIVATE" not in trajectory.prompt

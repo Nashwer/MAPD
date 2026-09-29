@@ -77,13 +77,24 @@ class AgenticSearchEnvironment:
         self.require_search = require_search
 
     def rollout(
-        self, sample: QASample, policy: StudentPolicy, *, max_new_tokens: int = 512
+        self,
+        sample: QASample,
+        policy: StudentPolicy,
+        *,
+        max_new_tokens: int = 512,
+        privileged_context: str | None = None,
     ) -> AgentTrajectory:
         if max_new_tokens < 1:
             raise ValueError("max_new_tokens must be positive")
+        user_content = sample.question
+        if privileged_context:
+            # This mirrors trainer.replay._initial_messages: PI is appended to
+            # x for the privileged state, while the serialized trajectory keeps
+            # the public question in ``prompt`` for apples-to-apples analysis.
+            user_content += "\n\n" + privileged_context
         messages = [
             {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": sample.question},
+            {"role": "user", "content": user_content},
         ]
         turns: list[AgentTurn] = []
         final_answer: str | None = None

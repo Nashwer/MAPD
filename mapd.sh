@@ -46,6 +46,8 @@ Commands:
   protocol-export OFFSET COUNT  Create a checksummed portable shard bundle
   shallow-trace-export [ROLLOUTS] [ID]  Export one failed shallow-search trace for review
   review-traces-export OFFSET COUNT  Export two teacher negatives plus one student negative
+  privileged-rollout OFFSET COUNT [MODEL]  Probe student generation with protocol PI
+  privileged-start/status/logs/stop  Manage the privileged-generation probe job
   protocol-restore BUNDLE  Restore a bundle to its original artifact directory
   protocol-merge BUNDLE...  Merge and de-duplicate exported protocol bundles
   protocol-train-smoke OFFSET COUNT  Train on one real protocol shard and reload checkpoint
@@ -221,6 +223,47 @@ case ${1:-} in
       --project-root "$PROJECT_ROOT" \
       --artifacts "$SHARD_DIR/artifacts.jsonl" \
       --output-root "$PROJECT_ROOT/exports"
+    ;;
+  privileged-rollout)
+    cd "$PROJECT_ROOT"
+    OFFSET=${2:-0}
+    COUNT=${3:-20}
+    MODEL_PATH=${4:-${MAPD_MODEL_PATH:-"$HOME/models/Qwen3-1.7B"}}
+    [[ "$OFFSET" =~ ^[0-9]+$ && "$COUNT" =~ ^[1-9][0-9]*$ ]] || {
+      echo "OFFSET must be nonnegative and COUNT must be positive" >&2
+      exit 2
+    }
+    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}"
+    [[ -s "$SHARD_DIR/artifacts.jsonl" ]] || {
+      echo "protocol shard not found: $SHARD_DIR/artifacts.jsonl" >&2
+      exit 1
+    }
+    if ! curl -fsS --connect-timeout 1 --max-time 3 http://127.0.0.1:8000/health >/dev/null; then
+      echo "retriever is not healthy; run: bash mapd.sh retrieval-start" >&2
+      exit 1
+    fi
+    OUTPUT_DIR="$PROJECT_ROOT/artifacts/privileged_rollout/offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}"
+    "$VERL_VENV/bin/python" scripts/privileged_branch_rollout.py \
+      --model "$MODEL_PATH" \
+      --artifacts "$SHARD_DIR/artifacts.jsonl" \
+      --output-dir "$OUTPUT_DIR" \
+      --retriever-url "${MAPD_RETRIEVER_URL:-http://127.0.0.1:8000/retrieve}"
+    ;;
+  privileged-start)
+    OFFSET=${2:-0}
+    COUNT=${3:-20}
+    MODEL_PATH=${4:-${MAPD_MODEL_PATH:-"$HOME/models/Qwen3-1.7B"}}
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" start privileged-rollout \
+      bash "$PROJECT_ROOT/mapd.sh" privileged-rollout "$OFFSET" "$COUNT" "$MODEL_PATH"
+    ;;
+  privileged-status)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" status privileged-rollout
+    ;;
+  privileged-logs)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" logs privileged-rollout 100
+    ;;
+  privileged-stop)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" stop privileged-rollout
     ;;
   protocol-restore)
     cd "$PROJECT_ROOT"
