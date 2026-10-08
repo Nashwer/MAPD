@@ -14,3 +14,8 @@ Run `bash mapd.sh data-setup` to populate the QA directories and
 `bash mapd.sh wiki-setup` to build `wiki18/index/wiki18.sqlite3`. Repository
 fixtures are sufficient for local tests, but full data/index presence must not
 be inferred from directory names. Generated files remain ignored by Git.
+
+Run `bash mapd.sh data-export` to validate and package the prepared 25,600-example
+training reconstruction plus its held-out split and provenance manifests. Add
+the argument `source` only when the original source Parquet files must also be
+carried to another machine. Neither form includes wiki-18 or generated protocols.

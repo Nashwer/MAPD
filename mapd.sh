@@ -35,6 +35,7 @@ Commands:
   setup      Install into the sibling veRL environment and run full verification
   verify     Run tests and the offline end-to-end smoke flow
   data-setup Download and prepare the de-duplicated 25,600-example training set
+  data-export [source]  Validate and bundle the prepared training data; include raw Parquet with source
   wiki-setup Download wiki-18 and build/reuse the persistent SQLite FTS5 index
   wiki-start/status/logs/stop  Manage wiki-18 setup as a background job
   retrieval-start/status/logs/stop  Manage the command-line retrieval service
@@ -86,6 +87,23 @@ case ${1:-} in
       --train data/downloads/qa/train.parquet \
       --heldout data/downloads/qa/test.parquet \
       --source-revision "$qa_revision"
+    ;;
+  data-export)
+    cd "$PROJECT_ROOT"
+    DATA_EXPORT_ARGS=()
+    DATA_EXPORT_SUFFIX=""
+    if [[ "${2:-}" == "source" ]]; then
+      DATA_EXPORT_ARGS+=(--include-source)
+      DATA_EXPORT_SUFFIX="_with_source"
+    elif [[ -n "${2:-}" ]]; then
+      echo "usage: bash mapd.sh data-export [source]" >&2
+      exit 2
+    fi
+    "$VERL_VENV/bin/python" scripts/data_bundle.py \
+      --data-root "$PROJECT_ROOT/data" \
+      --output "$PROJECT_ROOT/exports/mapd_training_data_25600_seed42${DATA_EXPORT_SUFFIX}.tar.gz" \
+      --expected-revision "$MAPD_QA_REVISION" \
+      "${DATA_EXPORT_ARGS[@]}"
     ;;
   wiki-setup)
     cd "$PROJECT_ROOT"
