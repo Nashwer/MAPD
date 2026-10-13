@@ -20,6 +20,11 @@ if [[ -f "$PROJECT_ROOT/scripts/bootstrap_versions.env" ]]; then
   source "$PROJECT_ROOT/scripts/bootstrap_versions.env"
   export MAPD_QA_REVISION MAPD_WIKI18_REVISION MAPD_WIKI18_E5_REVISION
 fi
+PROTOCOL_RUN_TAG=${MAPD_PROTOCOL_RUN_TAG:-r${PROTOCOL_SYNTHESIS_REVISION}}
+[[ "$PROTOCOL_RUN_TAG" =~ ^[A-Za-z0-9._-]+$ ]] || {
+  echo "MAPD_PROTOCOL_RUN_TAG may contain only letters, digits, dot, underscore, and hyphen" >&2
+  exit 2
+}
 
 if [[ -x /usr/local/cuda-13.0/bin/nvcc ]]; then
   export CUDA_HOME=${CUDA_HOME:-/usr/local/cuda-13.0}
@@ -185,7 +190,7 @@ case ${1:-} in
     "$VERL_VENV/bin/python" scripts/generate_protocol.py \
       --config configs/paper_like.yaml \
       --input "$TRAIN_DATA" \
-      --output "artifacts/protocol_smoke_r${PROTOCOL_SYNTHESIS_REVISION}" \
+      --output "artifacts/protocol_smoke_${PROTOCOL_RUN_TAG}" \
       --limit "${2:-20}" \
       --progress-every 1
     ;;
@@ -197,7 +202,7 @@ case ${1:-} in
       echo "OFFSET must be nonnegative and COUNT must be positive" >&2
       exit 2
     }
-    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}"
+    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}_${PROTOCOL_RUN_TAG}"
     TRAIN_DATA=${MAPD_TRAIN_DATA:-data/training/mapd_train_25600.jsonl}
     "$VERL_VENV/bin/python" scripts/generate_protocol.py \
       --config configs/paper_like.yaml \
@@ -230,10 +235,10 @@ case ${1:-} in
       echo "OFFSET must be nonnegative and COUNT must be positive" >&2
       exit 2
     }
-    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}"
+    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}_${PROTOCOL_RUN_TAG}"
     "$VERL_VENV/bin/python" scripts/protocol_bundle.py export \
       --source "$SHARD_DIR" \
-      --output "$PROJECT_ROOT/exports/protocol_offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}.tar.gz" \
+      --output "$PROJECT_ROOT/exports/protocol_offset_${OFFSET}_count_${COUNT}_${PROTOCOL_RUN_TAG}.tar.gz" \
       --project-root "$PROJECT_ROOT" \
       --offset "$OFFSET" \
       --count "$COUNT"
@@ -256,7 +261,7 @@ case ${1:-} in
       echo "OFFSET must be nonnegative and COUNT must be positive" >&2
       exit 2
     }
-    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}"
+    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}_${PROTOCOL_RUN_TAG}"
     "$VERL_VENV/bin/python" scripts/export_review_traces.py \
       --project-root "$PROJECT_ROOT" \
       --artifacts "$SHARD_DIR/artifacts.jsonl" \
@@ -271,7 +276,7 @@ case ${1:-} in
       echo "OFFSET must be nonnegative and COUNT must be positive" >&2
       exit 2
     }
-    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}"
+    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}_${PROTOCOL_RUN_TAG}"
     [[ -s "$SHARD_DIR/artifacts.jsonl" ]] || {
       echo "protocol shard not found: $SHARD_DIR/artifacts.jsonl" >&2
       exit 1
@@ -280,7 +285,7 @@ case ${1:-} in
       echo "retriever is not healthy; run: bash mapd.sh retrieval-start" >&2
       exit 1
     fi
-    OUTPUT_DIR="$PROJECT_ROOT/artifacts/privileged_rollout/offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}"
+    OUTPUT_DIR="$PROJECT_ROOT/artifacts/privileged_rollout/offset_${OFFSET}_count_${COUNT}_${PROTOCOL_RUN_TAG}"
     "$VERL_VENV/bin/python" scripts/privileged_branch_rollout.py \
       --model "$MODEL_PATH" \
       --artifacts "$SHARD_DIR/artifacts.jsonl" \
@@ -325,7 +330,7 @@ case ${1:-} in
       echo "OFFSET must be nonnegative and COUNT must be positive" >&2
       exit 2
     }
-    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}"
+    SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}_${PROTOCOL_RUN_TAG}"
     [[ -s "$SHARD_DIR/artifacts.jsonl" ]] || {
       echo "protocol shard not found: $SHARD_DIR/artifacts.jsonl" >&2
       exit 1
@@ -334,7 +339,7 @@ case ${1:-} in
       echo "retriever is not healthy; run: bash mapd.sh retrieval-start" >&2
       exit 1
     fi
-    OUTPUT_DIR="$PROJECT_ROOT/artifacts/protocol_train_smoke/offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}_action_v4"
+    OUTPUT_DIR="$PROJECT_ROOT/artifacts/protocol_train_smoke/offset_${OFFSET}_count_${COUNT}_${PROTOCOL_RUN_TAG}_action_v4"
     "$VERL_VENV/bin/python" scripts/protocol_train_smoke_rollout.py \
       --model "$MODEL_PATH" \
       --artifacts "$SHARD_DIR/artifacts.jsonl" \
