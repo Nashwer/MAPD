@@ -370,11 +370,26 @@ class OpenAICompatibleTeacher:
         }
         if self.max_output_tokens is not None:
             body["max_tokens"] = self.max_output_tokens
+        is_gemini = "generativelanguage.googleapis.com" in self.base_url.lower()
         if self.thinking_mode == "disabled":
+            if is_gemini:
+                raise ValueError(
+                    "Gemini 3.8 Flash does not support disabled thinking; "
+                    "set MAPD_TEACHER_THINKING_MODE=low"
+                )
             body["thinking"] = {"type": "disabled"}
-        elif self.thinking_mode in {"low", "high", "max"}:
-            body["thinking"] = {"type": "enabled"}
-            body["reasoning_effort"] = self.thinking_mode
+        elif self.thinking_mode in {"low", "medium", "high", "max"}:
+            if is_gemini:
+                if self.thinking_mode == "max":
+                    raise ValueError(
+                        "Gemini 3.8 Flash supports low, medium, or high thinking, not max"
+                    )
+                # Google's OpenAI-compatible endpoint accepts reasoning_effort,
+                # but not DeepSeek's provider-specific `thinking` object.
+                body["reasoning_effort"] = self.thinking_mode
+            else:
+                body["thinking"] = {"type": "enabled"}
+                body["reasoning_effort"] = self.thinking_mode
         error: Exception | None = None
         last_decoded: dict[str, Any] | None = None
         base_system_prompt = body["messages"][0]["content"]

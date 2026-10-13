@@ -9,17 +9,16 @@ teacher:
   api_key_env: MAPD_TEACHER_API_KEY
   timeout_seconds: 120
   max_retries: 5
-  # DeepSeek defaults to high-effort thinking. Structured protocol roles use
-  # bounded non-thinking JSON to make cost and latency predictable.
-  thinking_mode: disabled
+  # DeepSeek supports disabled thinking; Gemini 3.8 Flash supports low/medium/high.
+  thinking_mode: ${MAPD_TEACHER_THINKING_MODE:-disabled}
   # Protocolizer responses contain several structured fields and can exceed
   # 2K tokens even in non-thinking mode. This remains only a ceiling; concise
   # role prompts keep ordinary responses much shorter.
   max_output_tokens: 8192
   budget_usd: ${MAPD_TEACHER_BUDGET_USD:-5.0}
-  # Conservative DeepSeek Flash peak-hour cache-miss prices (USD / 1M tokens).
-  input_price_per_million: 0.30
-  output_price_per_million: 1.20
+  # Configure the active provider's standard USD price per 1M tokens.
+  input_price_per_million: ${MAPD_TEACHER_INPUT_PRICE_PER_MILLION:-0.30}
+  output_price_per_million: ${MAPD_TEACHER_OUTPUT_PRICE_PER_MILLION:-1.20}
 retrieval:
   backend: http
   corpus_path: null

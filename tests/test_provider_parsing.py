@@ -186,6 +186,45 @@ def test_deepseek_teacher_disables_thinking_caps_output_and_tracks_budget(
         teacher.generate_json("searcher", {"subtask": {}})
 
 
+def test_gemini_teacher_uses_openai_reasoning_effort_without_deepseek_thinking(
+    monkeypatch,
+):
+    requests = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": '{"queries": ["tower"]}'}}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+            }
+
+    def fake_post(url, **kwargs):
+        requests.append((url, kwargs))
+        return Response()
+
+    monkeypatch.setenv("TEST_GEMINI_KEY", "secret")
+    monkeypatch.setattr("mapd.mas.provider.httpx.post", fake_post)
+    teacher = OpenAICompatibleTeacher(
+        model="gemini-3.8-flash",
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+        api_key_env="TEST_GEMINI_KEY",
+        timeout_seconds=10,
+        max_retries=0,
+        thinking_mode="low",
+    )
+
+    assert teacher.generate_json("searcher", {"subtask": {}}) == {
+        "queries": ["tower"]
+    }
+    url, kwargs = requests[0]
+    assert url.endswith("/v1beta/openai/chat/completions")
+    assert kwargs["json"]["reasoning_effort"] == "low"
+    assert "thinking" not in kwargs["json"]
+
+
 def test_usage_summary_separates_shard_usage_from_cumulative_budget(tmp_path):
     ledger = tmp_path / "ledger.jsonl"
     ledger.write_text(

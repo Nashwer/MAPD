@@ -128,6 +128,7 @@ MAPD 联合反传，并验证 checkpoint 能恢复。该命令是低显存工程
 
 ```bash
 bash mapd.sh data-setup
+bash mapd.sh data-sample 30 42
 bash mapd.sh wiki-setup
 bash mapd.sh retrieval-start
 bash mapd.sh retrieval-status
@@ -139,6 +140,12 @@ bash mapd.sh grpo-smoke
 建立 held-out 问题集合，按规范化问题去重并排除重叠，然后以固定 seed 构建 25,600 条
 训练子集。论文未公开这 25,600 条的抽样 ID，因此当前实现明确采用 NQ/HotpotQA
 各 12,800 条的可复现分层抽样。
+
+`data-sample 30 42` 再从该训练集按来源分层、无放回地抽取 30%（NQ/HotpotQA
+各 3,840 条），同时写出含输入/输出哈希和样本 ID 哈希的 manifest。设置
+`MAPD_TRAIN_DATA=data/training/mapd_train_30pct_seed42.jsonl` 后，retrieval 与
+protocol 命令会使用该子集。Gemini 3.8 Flash 的 OpenAI 兼容配置示例见
+`.env.example`；模型名必须写为 `gemini-3.8-flash`。
 
 `wiki-setup` 下载约 5.1 GB 的压缩 wiki-18 语料并构建磁盘持久化 SQLite FTS5/BM25
 索引；这是仓库自带、低依赖的复现后端，不是论文/Search-R1 的 E5 dense index。

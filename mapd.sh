@@ -35,6 +35,7 @@ Commands:
   setup      Install into the sibling veRL environment and run full verification
   verify     Run tests and the offline end-to-end smoke flow
   data-setup Download and prepare the de-duplicated 25,600-example training set
+  data-sample [PERCENT] [SEED]  Create a deterministic source-stratified training subset
   data-export [source]  Validate and bundle the prepared training data; include raw Parquet with source
   wiki-setup Download wiki-18 and build/reuse the persistent SQLite FTS5 index
   wiki-start/status/logs/stop  Manage wiki-18 setup as a background job
@@ -105,6 +106,22 @@ case ${1:-} in
       --expected-revision "$MAPD_QA_REVISION" \
       "${DATA_EXPORT_ARGS[@]}"
     ;;
+  data-sample)
+    cd "$PROJECT_ROOT"
+    PERCENT=${2:-30}
+    SAMPLE_SEED=${3:-42}
+    [[ "$PERCENT" =~ ^[0-9]+([.][0-9]+)?$ && "$SAMPLE_SEED" =~ ^-?[0-9]+$ ]] || {
+      echo "PERCENT must be numeric and SEED must be an integer" >&2
+      exit 2
+    }
+    PERCENT_LABEL=${PERCENT//./p}
+    "$VERL_VENV/bin/python" scripts/sample_training_data.py \
+      --input "$PROJECT_ROOT/data/training/mapd_train_25600.jsonl" \
+      --output "$PROJECT_ROOT/data/training/mapd_train_${PERCENT_LABEL}pct_seed${SAMPLE_SEED}.jsonl" \
+      --manifest "$PROJECT_ROOT/data/training/mapd_train_${PERCENT_LABEL}pct_seed${SAMPLE_SEED}.manifest.json" \
+      --percent "$PERCENT" \
+      --seed "$SAMPLE_SEED"
+    ;;
   wiki-setup)
     cd "$PROJECT_ROOT"
     "$VERL_VENV/bin/python" scripts/download_real_data.py wiki
@@ -151,8 +168,9 @@ case ${1:-} in
     ;;
   retrieval-smoke)
     cd "$PROJECT_ROOT"
+    TRAIN_DATA=${MAPD_TRAIN_DATA:-data/training/mapd_train_25600.jsonl}
     "$VERL_VENV/bin/python" scripts/retrieval_smoke.py \
-      --qa data/training/mapd_train_25600.jsonl --limit "${2:-20}" --top-k 3
+      --qa "$TRAIN_DATA" --limit "${2:-20}" --top-k 3
     ;;
   grpo-smoke)
     cd "$PROJECT_ROOT"
@@ -163,9 +181,10 @@ case ${1:-} in
     ;;
   protocol-smoke)
     cd "$PROJECT_ROOT"
+    TRAIN_DATA=${MAPD_TRAIN_DATA:-data/training/mapd_train_25600.jsonl}
     "$VERL_VENV/bin/python" scripts/generate_protocol.py \
       --config configs/paper_like.yaml \
-      --input data/training/mapd_train_25600.jsonl \
+      --input "$TRAIN_DATA" \
       --output "artifacts/protocol_smoke_r${PROTOCOL_SYNTHESIS_REVISION}" \
       --limit "${2:-20}" \
       --progress-every 1
@@ -179,9 +198,10 @@ case ${1:-} in
       exit 2
     }
     SHARD_DIR="$PROJECT_ROOT/artifacts/protocol_shards/offset_${OFFSET}_count_${COUNT}_r${PROTOCOL_SYNTHESIS_REVISION}"
+    TRAIN_DATA=${MAPD_TRAIN_DATA:-data/training/mapd_train_25600.jsonl}
     "$VERL_VENV/bin/python" scripts/generate_protocol.py \
       --config configs/paper_like.yaml \
-      --input data/training/mapd_train_25600.jsonl \
+      --input "$TRAIN_DATA" \
       --output "$SHARD_DIR" \
       --offset "$OFFSET" \
       --limit "$COUNT" \
