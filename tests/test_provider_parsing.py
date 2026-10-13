@@ -228,6 +228,41 @@ def test_gemini_teacher_uses_openai_reasoning_effort_without_deepseek_thinking(
     assert "thinking" not in kwargs["json"]
 
 
+def test_gemini_relay_is_detected_by_model_name(monkeypatch):
+    requests = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": '{"queries": ["tower"]}'}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            }
+
+    def fake_post(url, **kwargs):
+        requests.append((url, kwargs))
+        return Response()
+
+    monkeypatch.setenv("TEST_RELAY_KEY", "secret")
+    monkeypatch.setattr("mapd.mas.provider.httpx.post", fake_post)
+    teacher = OpenAICompatibleTeacher(
+        model="gemini-3.8-flash",
+        base_url="https://relay.example/v1",
+        api_key_env="TEST_RELAY_KEY",
+        timeout_seconds=10,
+        max_retries=0,
+        thinking_mode="low",
+    )
+
+    teacher.generate_json("searcher", {"subtask": {}})
+
+    assert requests[0][0] == "https://relay.example/v1/chat/completions"
+    assert requests[0][1]["json"]["reasoning_effort"] == "low"
+    assert "thinking" not in requests[0][1]["json"]
+
+
 def test_teacher_enforces_configured_request_concurrency(monkeypatch):
     active = 0
     peak = 0

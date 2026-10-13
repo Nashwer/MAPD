@@ -368,7 +368,11 @@ class OpenAICompatibleTeacher:
         }
         if self.max_output_tokens is not None:
             body["max_tokens"] = self.max_output_tokens
-        is_gemini = "generativelanguage.googleapis.com" in self.base_url.lower()
+        # Relays commonly expose Gemini behind their own OpenAI-compatible
+        # domain, so model identity must take precedence over hostname.
+        is_gemini = self.model.lower().startswith("gemini-") or (
+            "generativelanguage.googleapis.com" in self.base_url.lower()
+        )
         if self.thinking_mode == "disabled":
             if is_gemini:
                 raise ValueError(
