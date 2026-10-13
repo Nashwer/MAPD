@@ -329,6 +329,13 @@ Each completed example atomically updates `artifacts.jsonl`. A bundle may be
 exported after completion or while the job is still running; only the last
 complete checkpoint is included:
 
+Model-content failures that affect only one example are recorded in
+`failures.jsonl` and do not terminate the shard. The final manifest reports
+`requested_count`, generated `count`, and `failed` separately. Infrastructure
+failures such as an unavailable teacher API, exhausted budget, or unreachable
+retriever still stop the job immediately so a broken service cannot consume an
+entire shard's request budget.
+
 ```bash
 bash mapd.sh protocol-export 0 100
 ```

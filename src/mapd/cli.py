@@ -34,7 +34,7 @@ from mapd.trainer.opsd import select_privileged_information
 
 app = typer.Typer(no_args_is_help=True, help="MAPD reproduction utilities")
 ARTIFACT_SCHEMA_VERSION = 3
-SYNTHESIS_REVISION = 8
+SYNTHESIS_REVISION = 9
 
 
 def _build_teacher(
@@ -96,6 +96,7 @@ def _run_synthesis(config: AppConfig, samples: list[QASample], output_dir: Path)
         }
     )
     artifact_path = output_dir / "artifacts.jsonl"
+    failure_path = output_dir / "failures.jsonl"
     cached_by_id: dict[str, SynthesisArtifact] = {}
     if artifact_path.exists():
         try:
@@ -140,7 +141,53 @@ def _run_synthesis(config: AppConfig, samples: list[QASample], output_dir: Path)
     def completed_artifacts() -> list[SynthesisArtifact]:
         return [artifact for artifact in results if artifact is not None]
 
-    completed = cache_hits
+    failures_by_id: dict[str, dict[str, object]] = {}
+
+    def record_sample_failure(sample: QASample, error: Exception) -> None:
+        failures_by_id[sample.id] = {
+            "example_id": sample.id,
+            "error_type": type(error).__name__,
+            "error": str(error)[:2000],
+            "sample_hash": stable_hash(sample),
+            "config_hash": config_hash,
+            "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
+            "synthesis_revision": SYNTHESIS_REVISION,
+            "time": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def failed_samples() -> list[dict[str, object]]:
+        return [
+            failures_by_id[sample.id]
+            for sample in samples
+            if sample.id in failures_by_id
+        ]
+
+    def write_checkpoint() -> list[SynthesisArtifact]:
+        artifacts = completed_artifacts()
+        write_jsonl(artifact_path, artifacts)
+        write_jsonl(failure_path, failed_samples())
+        return artifacts
+
+    def emit_progress(processed: int) -> None:
+        artifacts = write_checkpoint()
+        progress = {
+            "event": "synthesis_progress",
+            "processed": processed,
+            "total": total,
+            "generated": len(artifacts),
+            "failed": len(failures_by_id),
+            "passed": sum(item.quality.passed for item in artifacts),
+            "cache_hits": cache_hits,
+            "checkpoint": str(artifact_path),
+            "failures": str(failure_path),
+            "time": datetime.now(timezone.utc).isoformat(),
+            "synthesis_workers": config.run.synthesis_workers,
+        }
+        if isinstance(teacher, OpenAICompatibleTeacher):
+            progress["teacher_usage"] = teacher.usage_summary()
+        typer.echo(json.dumps(progress, ensure_ascii=False))
+
+    processed = cache_hits
     with ThreadPoolExecutor(max_workers=config.run.synthesis_workers) as executor:
         future_samples = {
             executor.submit(synthesize_one, index, sample): sample
@@ -150,6 +197,12 @@ def _run_synthesis(config: AppConfig, samples: list[QASample], output_dir: Path)
             sample = future_samples[future]
             try:
                 index, artifact = future.result()
+            except (ValueError, TypeError) as error:
+                # Model-generated content can make one example unusable (for
+                # example, every proposed query can violate the leak guard).
+                # Reject that example without sacrificing unrelated work.
+                record_sample_failure(sample, error)
+                processed += 1
             except Exception as error:
                 for unfinished in future_samples:
                     unfinished.cancel()
@@ -158,60 +211,40 @@ def _run_synthesis(config: AppConfig, samples: list[QASample], output_dir: Path)
                 # avoids paying for concurrent teacher calls and discarding
                 # their artifacts.
                 executor.shutdown(wait=True, cancel_futures=True)
-                for completed_future in future_samples:
+                for completed_future, completed_sample in future_samples.items():
                     if completed_future.cancelled() or not completed_future.done():
                         continue
                     try:
                         completed_index, completed_artifact = completed_future.result()
+                    except (ValueError, TypeError) as completed_error:
+                        record_sample_failure(completed_sample, completed_error)
+                        continue
                     except Exception:
                         continue
                     results[completed_index] = completed_artifact
-                write_jsonl(artifact_path, completed_artifacts())
+                write_checkpoint()
                 raise RuntimeError(
                     f"synthesis failed for example_id={sample.id!r}: {error}"
                 ) from error
-            results[index] = artifact
-            completed += 1
+            else:
+                results[index] = artifact
+                processed += 1
 
-            if completed % config.run.progress_every == 0 or completed == total:
-                artifacts = completed_artifacts()
-                # Rewriting the checkpoint keeps JSONL valid if an SSH session
-                # or teacher request is interrupted between progress points.
-                write_jsonl(artifact_path, artifacts)
-                progress = {
-                    "event": "synthesis_progress",
-                    "processed": completed,
-                    "total": total,
-                    "passed": sum(item.quality.passed for item in artifacts),
-                    "cache_hits": cache_hits,
-                    "checkpoint": str(artifact_path),
-                    "time": datetime.now(timezone.utc).isoformat(),
-                    "synthesis_workers": config.run.synthesis_workers,
-                }
-                if isinstance(teacher, OpenAICompatibleTeacher):
-                    progress["teacher_usage"] = teacher.usage_summary()
-                typer.echo(json.dumps(progress, ensure_ascii=False))
+            if processed % config.run.progress_every == 0 or processed == total:
+                # Rewriting both JSONL files keeps checkpoints valid if an SSH
+                # session is interrupted between progress points.
+                emit_progress(processed)
 
     artifacts = completed_artifacts()
-    if len(artifacts) != total:
-        raise RuntimeError(f"synthesis completed {len(artifacts)} of {total} samples")
+    if len(artifacts) + len(failures_by_id) != total:
+        raise RuntimeError(
+            "synthesis accounted for "
+            f"{len(artifacts) + len(failures_by_id)} of {total} samples"
+        )
     if not pending and total:
-        write_jsonl(artifact_path, artifacts)
-        progress = {
-            "event": "synthesis_progress",
-            "processed": total,
-            "total": total,
-            "passed": sum(item.quality.passed for item in artifacts),
-            "cache_hits": cache_hits,
-            "checkpoint": str(artifact_path),
-            "time": datetime.now(timezone.utc).isoformat(),
-            "synthesis_workers": config.run.synthesis_workers,
-        }
-        if isinstance(teacher, OpenAICompatibleTeacher):
-            progress["teacher_usage"] = teacher.usage_summary()
-        typer.echo(json.dumps(progress, ensure_ascii=False))
+        emit_progress(total)
 
-    write_jsonl(artifact_path, artifacts)
+    write_checkpoint()
     write_jsonl(output_dir / "explorations.jsonl", [artifact.exploration for artifact in artifacts])
     write_jsonl(
         output_dir / "protocols.jsonl",
@@ -221,6 +254,9 @@ def _run_synthesis(config: AppConfig, samples: list[QASample], output_dir: Path)
     write_jsonl(output_dir / "training.jsonl", [to_verl_record(artifact, index) for index, artifact in enumerate(artifacts)])
     manifest = {
         "count": len(artifacts),
+        "requested_count": total,
+        "failed": len(failures_by_id),
+        "failure_file": str(failure_path),
         "passed": sum(artifact.quality.passed for artifact in artifacts),
         "exploration_success": sum(artifact.exploration.success for artifact in artifacts),
         "succeeded_protocols": sum(

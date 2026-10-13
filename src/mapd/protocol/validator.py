@@ -3,7 +3,7 @@ from __future__ import annotations
 from mapd.data.schema import QASample
 from mapd.mas.schema import ExplorationLog
 from mapd.protocol.grounding_check import facts_are_extractive
-from mapd.protocol.leak_check import protocol_has_leak
+from mapd.protocol.leak_check import hidden_answers, protocol_has_leak
 from mapd.protocol.schema import QualityReport, StructuredProtocol
 from mapd.reward.exact_match import exact_match
 
@@ -45,7 +45,7 @@ def validate_protocol(
     checks["no_answer_leak"] = not protocol_has_leak(
         protocol.reasoning_plan,
         [search.query for search in exploration.searches],
-        sample.answers,
+        hidden_answers(sample.question, sample.answers),
     )
     if not checks["no_answer_leak"]:
         errors.append("answer leakage detected in reasoning plan or retrieval query")

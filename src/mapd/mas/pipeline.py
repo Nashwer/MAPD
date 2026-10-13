@@ -11,6 +11,7 @@ from mapd.mas.repair import Repair
 from mapd.mas.schema import ExplorationLog, SearchFinding, SearchRecord, SubTask, SynthesisArtifact
 from mapd.mas.searcher import Searcher
 from mapd.protocol.schema import TaskType
+from mapd.protocol.leak_check import hidden_answers
 from mapd.protocol.validator import validate_protocol
 from mapd.retrieval.base import Retriever
 from mapd.reward.exact_match import exact_match
@@ -41,6 +42,10 @@ class MASPipeline:
         candidate = None
         success = False
         search_rounds = 0
+        # A candidate named in the public question is model-visible input, not
+        # privileged ground truth.  Keep only genuinely hidden aliases in the
+        # oracle-leak guard used by search workers.
+        forbidden_answers = hidden_answers(sample.question, sample.answers)
 
         for round_index in range(1, self.config.max_rounds + 1):
             proposed_type, proposed = self.orchestrator.plan(sample.question, round_index, findings)
@@ -50,7 +55,9 @@ class MASPipeline:
                 raise ValueError("orchestrator returned no subtask for the initial search round")
             if not proposed:
                 break
-            new_searches, new_findings = self._execute_dependency_graph(proposed, findings, sample.answers)
+            new_searches, new_findings = self._execute_dependency_graph(
+                proposed, findings, forbidden_answers
+            )
             subtasks.extend(proposed)
             searches.extend(new_searches)
             findings.extend(new_findings)
@@ -73,7 +80,9 @@ class MASPipeline:
             repairs.append(repair_record)
             if not proposed:
                 break
-            new_searches, new_findings = self._execute_dependency_graph(proposed, findings, sample.answers)
+            new_searches, new_findings = self._execute_dependency_graph(
+                proposed, findings, forbidden_answers
+            )
             subtasks.extend(proposed)
             searches.extend(new_searches)
             findings.extend(new_findings)

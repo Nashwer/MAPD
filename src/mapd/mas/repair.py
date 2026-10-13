@@ -5,7 +5,7 @@ import re
 from mapd.mas.orchestrator import parse_subtasks
 from mapd.mas.provider import TeacherClient
 from mapd.mas.schema import RepairRecord, SearchFinding, SubTask
-from mapd.protocol.leak_check import contains_answer
+from mapd.protocol.leak_check import contains_answer, hidden_answers
 
 
 class Repair:
@@ -38,7 +38,12 @@ class Repair:
             f"repair-{round_index}",
             self.max_subquestions,
         )
-        proposed = [item for item in proposed if not contains_answer(item.objective, answers)]
+        forbidden_answers = hidden_answers(question, answers)
+        proposed = [
+            item
+            for item in proposed
+            if not contains_answer(item.objective, forbidden_answers)
+        ]
         record = RepairRecord(
             round_index=round_index,
             diagnosis=redact_answers(str(result.get("diagnosis", "")), answers),

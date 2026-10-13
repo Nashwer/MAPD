@@ -2,6 +2,8 @@ import json
 import threading
 import time
 
+import pytest
+
 from mapd.cli import _run_synthesis
 from mapd.config import load_config
 from mapd.io import read_jsonl
@@ -70,6 +72,45 @@ def test_synthesis_uses_configured_sample_workers(tmp_path, monkeypatch):
     _run_synthesis(config, samples, tmp_path)
 
     assert peak == 2
+
+
+def test_synthesis_records_sample_rejection_and_continues(tmp_path, monkeypatch):
+    config = load_config("configs/local_smoke.yaml")
+    samples = read_jsonl("tests/fixtures/qa.jsonl", QASample)
+    original = MASPipeline.synthesize
+
+    def reject_one(self, sample):
+        if sample.id == "smoke-1":
+            raise ValueError("sample-local leak guard rejection")
+        return original(self, sample)
+
+    monkeypatch.setattr(MASPipeline, "synthesize", reject_one)
+    artifacts = _run_synthesis(config, samples, tmp_path)
+
+    failures = [
+        json.loads(line)
+        for line in (tmp_path / "failures.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    assert [artifact.sample.id for artifact in artifacts] == ["smoke-2"]
+    assert failures[0]["example_id"] == "smoke-1"
+    assert failures[0]["error_type"] == "ValueError"
+    assert manifest["requested_count"] == 2
+    assert manifest["count"] == 1
+    assert manifest["failed"] == 1
+
+
+def test_synthesis_still_stops_on_operational_failure(tmp_path, monkeypatch):
+    config = load_config("configs/local_smoke.yaml")
+    samples = read_jsonl("tests/fixtures/qa.jsonl", QASample)
+
+    def fail_service(self, sample):
+        raise RuntimeError("teacher API unavailable")
+
+    monkeypatch.setattr(MASPipeline, "synthesize", fail_service)
+    with pytest.raises(RuntimeError, match="teacher API unavailable"):
+        _run_synthesis(config, samples, tmp_path)
 
 
 def test_ground_truth_is_confined_to_repair_and_never_reaches_search_or_answerer():

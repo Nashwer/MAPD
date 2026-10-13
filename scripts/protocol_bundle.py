@@ -21,6 +21,7 @@ from mapd.mas.schema import SynthesisArtifact
 BUNDLE_SCHEMA = "mapd-protocol-bundle-v1"
 PAYLOAD_NAMES = (
     "artifacts.jsonl",
+    "failures.jsonl",
     "explorations.jsonl",
     "protocols.jsonl",
     "quality.jsonl",
