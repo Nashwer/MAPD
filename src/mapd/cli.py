@@ -53,7 +53,9 @@ def _build_teacher(
         input_price_per_million=config.teacher.input_price_per_million,
         output_price_per_million=config.teacher.output_price_per_million,
         usage_log_path=usage_log_path,
-        budget_ledger_path=Path("artifacts/teacher_usage.jsonl"),
+        budget_ledger_path=Path(
+            os.getenv("MAPD_TEACHER_BUDGET_LEDGER", "artifacts/teacher_usage.jsonl")
+        ),
     )
 
 
