@@ -1,4 +1,7 @@
 import json
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import pytest
@@ -223,6 +226,55 @@ def test_gemini_teacher_uses_openai_reasoning_effort_without_deepseek_thinking(
     assert url.endswith("/v1beta/openai/chat/completions")
     assert kwargs["json"]["reasoning_effort"] == "low"
     assert "thinking" not in kwargs["json"]
+
+
+def test_teacher_enforces_configured_request_concurrency(monkeypatch):
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": '{"queries": ["tower"]}'}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            }
+
+    def fake_post(*_args, **_kwargs):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.03)
+        with lock:
+            active -= 1
+        return Response()
+
+    monkeypatch.setenv("TEST_GEMINI_KEY", "secret")
+    monkeypatch.setattr("mapd.mas.provider.httpx.post", fake_post)
+    teacher = OpenAICompatibleTeacher(
+        model="gemini-3.8-flash",
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+        api_key_env="TEST_GEMINI_KEY",
+        timeout_seconds=10,
+        max_retries=0,
+        max_concurrency=2,
+        thinking_mode="low",
+    )
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(
+            executor.map(
+                lambda _: teacher.generate_json("searcher", {"subtask": {}}),
+                range(4),
+            )
+        )
+
+    assert len(results) == 4
+    assert peak == 2
 
 
 def test_usage_summary_separates_shard_usage_from_cumulative_budget(tmp_path):

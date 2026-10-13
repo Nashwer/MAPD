@@ -7,6 +7,7 @@ import os
 import platform
 import sys
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -47,6 +48,7 @@ def _build_teacher(
         api_key_env=config.teacher.api_key_env,
         timeout_seconds=config.teacher.timeout_seconds,
         max_retries=config.teacher.max_retries,
+        max_concurrency=config.teacher.max_concurrency,
         thinking_mode=config.teacher.thinking_mode,
         max_output_tokens=config.teacher.max_output_tokens,
         budget_usd=config.teacher.budget_usd,
@@ -104,10 +106,11 @@ def _run_synthesis(config: AppConfig, samples: list[QASample], output_dir: Path)
             # the on-disk schema changes.
             cached_by_id = {}
 
-    artifacts: list[SynthesisArtifact] = []
+    results: list[SynthesisArtifact | None] = [None] * len(samples)
     cache_hits = 0
     total = len(samples)
-    for index, sample in enumerate(samples, start=1):
+    pending: list[tuple[int, QASample]] = []
+    for index, sample in enumerate(samples):
         sample_hash = stable_hash(sample)
         cached = cached_by_id.get(sample.id)
         if (
@@ -117,44 +120,96 @@ def _run_synthesis(config: AppConfig, samples: list[QASample], output_dir: Path)
             and cached.metadata.get("sample_hash") == sample_hash
             and cached.metadata.get("config_hash") == config_hash
         ):
-            artifacts.append(cached)
+            results[index] = cached
             cache_hits += 1
         else:
+            pending.append((index, sample))
+
+    def synthesize_one(index: int, sample: QASample) -> tuple[int, SynthesisArtifact]:
+        artifact = pipeline.synthesize(sample)
+        artifact.metadata.update(
+            {
+                "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
+                "synthesis_revision": SYNTHESIS_REVISION,
+                "sample_hash": stable_hash(sample),
+                "config_hash": config_hash,
+            }
+        )
+        return index, artifact
+
+    def completed_artifacts() -> list[SynthesisArtifact]:
+        return [artifact for artifact in results if artifact is not None]
+
+    completed = cache_hits
+    with ThreadPoolExecutor(max_workers=config.run.synthesis_workers) as executor:
+        future_samples = {
+            executor.submit(synthesize_one, index, sample): sample
+            for index, sample in pending
+        }
+        for future in as_completed(future_samples):
+            sample = future_samples[future]
             try:
-                artifact = pipeline.synthesize(sample)
+                index, artifact = future.result()
             except Exception as error:
-                # Preserve every completed sample even when the next sample
-                # fails between configured progress checkpoints.
-                write_jsonl(artifact_path, artifacts)
+                for unfinished in future_samples:
+                    unfinished.cancel()
+                # Let already-running requests finish, then preserve every
+                # successful result before surfacing the first failure. This
+                # avoids paying for concurrent teacher calls and discarding
+                # their artifacts.
+                executor.shutdown(wait=True, cancel_futures=True)
+                for completed_future in future_samples:
+                    if completed_future.cancelled() or not completed_future.done():
+                        continue
+                    try:
+                        completed_index, completed_artifact = completed_future.result()
+                    except Exception:
+                        continue
+                    results[completed_index] = completed_artifact
+                write_jsonl(artifact_path, completed_artifacts())
                 raise RuntimeError(
                     f"synthesis failed for example_id={sample.id!r}: {error}"
                 ) from error
-            artifact.metadata.update(
-                {
-                    "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
-                    "synthesis_revision": SYNTHESIS_REVISION,
-                    "sample_hash": sample_hash,
-                    "config_hash": config_hash,
-                }
-            )
-            artifacts.append(artifact)
+            results[index] = artifact
+            completed += 1
 
-        if index % config.run.progress_every == 0 or index == total:
-            # Rewriting the checkpoint keeps JSONL valid if an SSH session or
-            # teacher request is interrupted between progress boundaries.
-            write_jsonl(artifact_path, artifacts)
-            progress = {
-                "event": "synthesis_progress",
-                "processed": index,
-                "total": total,
-                "passed": sum(item.quality.passed for item in artifacts),
-                "cache_hits": cache_hits,
-                "checkpoint": str(artifact_path),
-                "time": datetime.now(timezone.utc).isoformat(),
-            }
-            if isinstance(teacher, OpenAICompatibleTeacher):
-                progress["teacher_usage"] = teacher.usage_summary()
-            typer.echo(json.dumps(progress, ensure_ascii=False))
+            if completed % config.run.progress_every == 0 or completed == total:
+                artifacts = completed_artifacts()
+                # Rewriting the checkpoint keeps JSONL valid if an SSH session
+                # or teacher request is interrupted between progress points.
+                write_jsonl(artifact_path, artifacts)
+                progress = {
+                    "event": "synthesis_progress",
+                    "processed": completed,
+                    "total": total,
+                    "passed": sum(item.quality.passed for item in artifacts),
+                    "cache_hits": cache_hits,
+                    "checkpoint": str(artifact_path),
+                    "time": datetime.now(timezone.utc).isoformat(),
+                    "synthesis_workers": config.run.synthesis_workers,
+                }
+                if isinstance(teacher, OpenAICompatibleTeacher):
+                    progress["teacher_usage"] = teacher.usage_summary()
+                typer.echo(json.dumps(progress, ensure_ascii=False))
+
+    artifacts = completed_artifacts()
+    if len(artifacts) != total:
+        raise RuntimeError(f"synthesis completed {len(artifacts)} of {total} samples")
+    if not pending and total:
+        write_jsonl(artifact_path, artifacts)
+        progress = {
+            "event": "synthesis_progress",
+            "processed": total,
+            "total": total,
+            "passed": sum(item.quality.passed for item in artifacts),
+            "cache_hits": cache_hits,
+            "checkpoint": str(artifact_path),
+            "time": datetime.now(timezone.utc).isoformat(),
+            "synthesis_workers": config.run.synthesis_workers,
+        }
+        if isinstance(teacher, OpenAICompatibleTeacher):
+            progress["teacher_usage"] = teacher.usage_summary()
+        typer.echo(json.dumps(progress, ensure_ascii=False))
 
     write_jsonl(artifact_path, artifacts)
     write_jsonl(output_dir / "explorations.jsonl", [artifact.exploration for artifact in artifacts])
@@ -196,6 +251,8 @@ def _run_synthesis(config: AppConfig, samples: list[QASample], output_dir: Path)
         "config_hash": config_hash,
         "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
         "synthesis_revision": SYNTHESIS_REVISION,
+        "synthesis_workers": config.run.synthesis_workers,
+        "teacher_max_concurrency": config.teacher.max_concurrency,
     }
     if isinstance(teacher, OpenAICompatibleTeacher):
         manifest["teacher_usage"] = teacher.usage_summary()

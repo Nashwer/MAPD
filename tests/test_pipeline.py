@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 
 from mapd.cli import _run_synthesis
 from mapd.config import load_config
@@ -41,6 +43,33 @@ def test_synthesis_cache_is_reused(tmp_path):
     _run_synthesis(config, samples, tmp_path)
     manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["cache_hits"] == len(samples)
+
+
+def test_synthesis_uses_configured_sample_workers(tmp_path, monkeypatch):
+    config = load_config("configs/local_smoke.yaml")
+    config.run.synthesis_workers = 2
+    samples = read_jsonl("tests/fixtures/qa.jsonl", QASample)
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+    original = MASPipeline.synthesize
+
+    def recording_synthesize(self, sample):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.03)
+        try:
+            return original(self, sample)
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(MASPipeline, "synthesize", recording_synthesize)
+    _run_synthesis(config, samples, tmp_path)
+
+    assert peak == 2
 
 
 def test_ground_truth_is_confined_to_repair_and_never_reaches_search_or_answerer():

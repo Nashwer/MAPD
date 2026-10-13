@@ -147,7 +147,9 @@ bash mapd.sh grpo-smoke
 protocol 命令会使用该子集。Gemini 3.8 Flash 的 OpenAI 兼容配置示例见
 `.env.example`；模型名必须写为 `gemini-3.8-flash`。同时设置独立的
 `MAPD_PROTOCOL_RUN_TAG` 和 `MAPD_TEACHER_BUDGET_LEDGER`，防止 Gemini 产物及
-累计计费与已有 DeepSeek 实验混用。
+累计计费与已有 DeepSeek 实验混用。`MAPD_TEACHER_CONCURRENCY=8` 限制实际
+在途 API 请求数，`MAPD_SYNTHESIS_WORKERS=8` 并行调度不同样本；checkpoint
+仍由主线程顺序写入，避免并发损坏 JSONL。
 
 `wiki-setup` 下载约 5.1 GB 的压缩 wiki-18 语料并构建磁盘持久化 SQLite FTS5/BM25
 索引；这是仓库自带、低依赖的复现后端，不是论文/Search-R1 的 E5 dense index。

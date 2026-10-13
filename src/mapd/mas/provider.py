@@ -5,7 +5,6 @@ import os
 import re
 import threading
 import time
-from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
@@ -297,6 +296,7 @@ class OpenAICompatibleTeacher:
         api_key_env: str,
         timeout_seconds: float,
         max_retries: int,
+        max_concurrency: int = 1,
         thinking_mode: str = "default",
         max_output_tokens: int | None = None,
         budget_usd: float | None = None,
@@ -310,6 +310,9 @@ class OpenAICompatibleTeacher:
         self.api_key_env = api_key_env
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
+        if max_concurrency < 1:
+            raise ValueError("max_concurrency must be positive")
+        self.max_concurrency = max_concurrency
         self.thinking_mode = thinking_mode
         self.max_output_tokens = max_output_tokens
         self.budget_usd = budget_usd
@@ -320,7 +323,7 @@ class OpenAICompatibleTeacher:
             Path(budget_ledger_path) if budget_ledger_path else None
         )
         self._usage_lock = threading.Lock()
-        self._budget_request_lock = threading.Lock()
+        self._request_slots = threading.BoundedSemaphore(max_concurrency)
         self._prompt_tokens = 0
         self._completion_tokens = 0
         self._request_count = 0
@@ -335,14 +338,9 @@ class OpenAICompatibleTeacher:
         self._load_existing_usage(self.usage_log_path, cumulative=False)
 
     def generate_json(self, role: str, payload: dict[str, Any]) -> dict[str, Any]:
-        # A configured budget serializes teacher calls so parallel searchers
-        # cannot all pass the same pre-request budget check concurrently.
-        guard = (
-            self._budget_request_lock
-            if self.budget_usd is not None
-            else nullcontext()
-        )
-        with guard:
+        # Bound actual in-flight API calls even when several samples and
+        # dependency-graph searchers are scheduled concurrently.
+        with self._request_slots:
             return self._generate_json_request(role, payload)
 
     def _generate_json_request(
@@ -462,6 +460,7 @@ class OpenAICompatibleTeacher:
                 "completion_tokens": self._run_completion_tokens,
                 "estimated_cost_usd": round(self._run_estimated_cost_usd, 8),
                 "budget_usd": self.budget_usd,
+                "max_concurrency": self.max_concurrency,
                 "cumulative_requests": self._request_count,
                 "cumulative_prompt_tokens": self._prompt_tokens,
                 "cumulative_completion_tokens": self._completion_tokens,

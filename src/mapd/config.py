@@ -28,6 +28,7 @@ class RunConfig(BaseModel):
     seed: int = 42
     artifact_dir: Path = Path("artifacts/default")
     progress_every: int = Field(default=100, ge=1)
+    synthesis_workers: int = Field(default=1, ge=1, le=64)
 
 
 class TeacherConfig(BaseModel):
@@ -37,6 +38,7 @@ class TeacherConfig(BaseModel):
     api_key_env: str = "MAPD_TEACHER_API_KEY"
     timeout_seconds: float = Field(default=60, gt=0)
     max_retries: int = Field(default=3, ge=0)
+    max_concurrency: int = Field(default=1, ge=1, le=64)
     thinking_mode: Literal["default", "disabled", "low", "medium", "high", "max"] = "default"
     max_output_tokens: int | None = Field(default=None, ge=1)
     budget_usd: float | None = Field(default=None, gt=0)
