@@ -249,6 +249,49 @@ document IDs. It accepts recall zero by default because this portable FTS5/BM25
 backend is not the paper's E5 dense index; the purpose of the first run is to
 verify the full corpus/API path and measure the actual baseline.
 
+### Optional compressed E5 backend
+
+The repository also provides a low-memory E5 backend for machines that cannot
+load Search-R1's full dense index. It uses Search-R1-compatible `query:` and
+`passage:` prefixes, mean pooling and normalized inner product, but stores the
+21M passage vectors as a FAISS IVF-PQ index. This is an engineering
+approximation, not the paper's exact index.
+
+The existing SQLite index is the document store, so run `wiki-setup` first.
+Build the dense index as a resumable background job:
+
+```bash
+bash mapd.sh e5-compressed-start
+bash mapd.sh e5-compressed-status
+bash mapd.sh e5-compressed-logs
+```
+
+The first stage downloads `intfloat/e5-base-v2`, trains IVF-PQ, then streams
+passages through the encoder. A snapshot is written every one million passages;
+after interruption, the same command resumes at the last snapshot. Success is
+reported as `COMPRESSED E5 INDEX BUILD OK`.
+
+With the default `IVF16384,PQ96x8` settings, vector codes are about 2.0 GB for
+21M passages, plus IDs, IVF structures, model memory and build workspace. Plan
+for roughly 8–16 GB free RAM during construction and several GB of disk in
+addition to the SQLite document store. These are practical estimates, not a
+hard upper bound. The previously discussed 128 GB requirement refers to RAM
+(main memory), not disk, and applies to using the large uncompressed official
+index with comfortable headroom; this compressed backend does not require it.
+
+After the build completes, set this one line in `.env` and restart retrieval:
+
+```bash
+MAPD_RETRIEVER_BACKEND=e5-ivfpq
+bash mapd.sh retrieval-stop
+bash mapd.sh retrieval-start
+bash mapd.sh retrieval-smoke 200
+```
+
+`/retrieve` and `/health` keep the same contract as the sparse backend. This
+lets a later higher-resource implementation replace IVF-PQ without changing the
+teacher, rollout or evaluation callers.
+
 Finally, perform the nonzero-GRPO acceptance:
 
 ```bash

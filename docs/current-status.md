@@ -80,18 +80,22 @@ tokens，OPSD loss `1.345361`，总损失 `0.067268`，梯度范数 `0.606946`�
   语料加载到内存。
 - 已实现纯命令行 Search-R1 兼容 `/retrieve` HTTP 服务、`/health`、后台状态/日志/停止
   命令，以及真实 QA answer recall@3 smoke。
+- 已实现可断点续建的 E5-base-v2 + FAISS IVF-PQ 压缩索引，以及保持相同 `/retrieve`
+  契约的可选 dense 后端；本地 fixture 已覆盖建库、复用、续建和 HTTP 查询。
 - 已实现真实 8 路 rollout 中自动寻找非零 reward variance，并在独立进程执行
   GRPO-only optimizer step/checkpoint 的验收入口。
 
 以上代码的 fixture/契约测试已经在本地通过；完整 Parquet、约 5.1 GB 压缩 wiki-18、
-全量索引和真实 GPU GRPO 尚未在服务器执行，因此仍标为“待验收”。仓库自带索引使用
-SQLite FTS5/BM25；Search-R1 的约 64.6 GB E5 FAISS 资产可下载，但本轮没有把 dense
-E5 后端并入默认服务，二者不能混称。
+全量索引和真实 GPU GRPO 尚未在服务器执行，因此仍标为“待验收”。默认索引仍使用
+SQLite FTS5/BM25；新增的 E5 IVF-PQ 是低内存近似后端，尚未在完整 wiki-18 上构建和
+测量，不能与 Search-R1 的官方 dense 索引或论文结果混称。
 
 ## 尚未完成
 
 - 在服务器实际下载并核验 25,600 条训练数据 manifest。
 - 在服务器完成 wiki-18 全量建库并记录体积、耗时和真实 recall@3。
+- 在服务器完成压缩 E5 全量建库，并与 SQLite FTS5 及官方 Search-R1 检索结果比较
+  recall@3、延迟和内存占用。
 - 将已实现的单卡双分支目标接入 veRL worker；veRL 的标准自定义 policy-loss hook 只提供
   选中 token log-prob，不能直接替代需要全词表 logits 的 OPSD worker 改造。
 - 运行已实现的真实 rollout/optimizer 入口，验收非零 GRPO GPU 更新。

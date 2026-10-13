@@ -5,11 +5,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
 
+from mapd.retrieval.base import Retriever
 from mapd.retrieval.sqlite_fts import SQLiteFTSRetriever
 
 
 class RetrievalHTTPServer(ThreadingHTTPServer):
-    retriever: SQLiteFTSRetriever
+    retriever: Retriever
     default_top_k: int
 
 
@@ -24,8 +25,8 @@ class RetrievalHandler(BaseHTTPRequestHandler):
             200,
             {
                 "status": "ok",
-                "backend": "sqlite-fts5",
-                "documents": self.server.retriever.document_count,
+                "backend": getattr(self.server.retriever, "backend_name", "unknown"),
+                "documents": getattr(self.server.retriever, "document_count", None),
             },
         )
 
@@ -73,17 +74,13 @@ class RetrievalHandler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
 
-def serve_retriever(
-    index_path: str,
+def serve_http_retriever(
+    retriever: Retriever,
     *,
     host: str = "127.0.0.1",
     port: int = 8000,
     default_top_k: int = 3,
-    query_timeout_seconds: float = 20.0,
 ) -> None:
-    retriever = SQLiteFTSRetriever(
-        index_path, query_timeout_seconds=query_timeout_seconds
-    )
     server = RetrievalHTTPServer((host, port), RetrievalHandler)
     server.retriever = retriever
     server.default_top_k = default_top_k
@@ -98,3 +95,20 @@ def serve_retriever(
         pass
     finally:
         server.server_close()
+
+
+def serve_retriever(
+    index_path: str,
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    default_top_k: int = 3,
+    query_timeout_seconds: float = 20.0,
+) -> None:
+    """Backward-compatible SQLite FTS service entrypoint."""
+    serve_http_retriever(
+        SQLiteFTSRetriever(index_path, query_timeout_seconds=query_timeout_seconds),
+        host=host,
+        port=port,
+        default_top_k=default_top_k,
+    )

@@ -151,6 +151,8 @@ def build_sqlite_fts_index(
 class SQLiteFTSRetriever:
     """Disk-backed BM25 retriever suitable for the full wiki-18 corpus."""
 
+    backend_name = "sqlite-fts5"
+
     def __init__(self, index_path: str | Path, *, query_timeout_seconds: float = 20.0):
         self.index_path = Path(index_path)
         if query_timeout_seconds <= 0:

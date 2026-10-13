@@ -44,6 +44,8 @@ Commands:
   data-export [source]  Validate and bundle the prepared training data; include raw Parquet with source
   wiki-setup Download wiki-18 and build/reuse the persistent SQLite FTS5 index
   wiki-start/status/logs/stop  Manage wiki-18 setup as a background job
+  e5-compressed-build  Build/resume the low-memory E5 IVF-PQ index
+  e5-compressed-start/status/logs/stop  Manage compressed E5 indexing
   retrieval-start/status/logs/stop  Manage the command-line retrieval service
   retrieval-smoke  Check real top-3 retrieval against normalized QA examples
   grpo-smoke Run real rollouts until rewards vary, then perform one GRPO update
@@ -148,11 +150,67 @@ case ${1:-} in
   wiki-stop)
     bash "$PROJECT_ROOT/scripts/jobctl.sh" stop wiki-setup
     ;;
+  e5-compressed-build)
+    cd "$PROJECT_ROOT"
+    E5_BUILD_ARGS=()
+    [[ -z "${MAPD_E5_LIMIT:-}" ]] || E5_BUILD_ARGS+=(--limit "$MAPD_E5_LIMIT")
+    "$VERL_VENV/bin/python" scripts/build_e5_compressed_index.py \
+      --docstore "${MAPD_E5_DOCSTORE:-$PROJECT_ROOT/data/wiki18/index/wiki18.sqlite3}" \
+      --index "${MAPD_E5_INDEX:-$PROJECT_ROOT/data/wiki18/e5_ivfpq/wiki18_e5_ivfpq.faiss}" \
+      --model "${MAPD_E5_MODEL:-intfloat/e5-base-v2}" \
+      --device "${MAPD_E5_DEVICE:-auto}" \
+      --batch-size "${MAPD_E5_BATCH_SIZE:-128}" \
+      --nlist "${MAPD_E5_NLIST:-16384}" \
+      --pq-m "${MAPD_E5_PQ_M:-96}" \
+      --pq-nbits "${MAPD_E5_PQ_NBITS:-8}" \
+      --train-size "${MAPD_E5_TRAIN_SIZE:-262144}" \
+      --nprobe "${MAPD_E5_NPROBE:-64}" \
+      --checkpoint-every "${MAPD_E5_CHECKPOINT_EVERY:-1000000}" \
+      --threads "${MAPD_E5_THREADS:-16}" \
+      "${E5_BUILD_ARGS[@]}"
+    ;;
+  e5-compressed-start)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" start e5-compressed \
+      bash "$PROJECT_ROOT/mapd.sh" e5-compressed-build
+    ;;
+  e5-compressed-status)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" status e5-compressed
+    ;;
+  e5-compressed-logs)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" logs e5-compressed 100
+    ;;
+  e5-compressed-stop)
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" stop e5-compressed
+    ;;
   retrieval-start)
+    RETRIEVER_BACKEND=${MAPD_RETRIEVER_BACKEND:-sqlite-fts5}
+    RETRIEVER_ARGS=(--backend "$RETRIEVER_BACKEND")
+    case "$RETRIEVER_BACKEND" in
+      sqlite-fts5)
+        RETRIEVER_ARGS+=(
+          --index "${MAPD_FTS_INDEX:-$PROJECT_ROOT/data/wiki18/index/wiki18.sqlite3}"
+          --query-timeout "${MAPD_RETRIEVER_QUERY_TIMEOUT:-20}"
+        )
+        ;;
+      e5-ivfpq)
+        RETRIEVER_ARGS+=(
+          --index "${MAPD_E5_INDEX:-$PROJECT_ROOT/data/wiki18/e5_ivfpq/wiki18_e5_ivfpq.faiss}"
+          --docstore "${MAPD_E5_DOCSTORE:-$PROJECT_ROOT/data/wiki18/index/wiki18.sqlite3}"
+          --model "${MAPD_E5_MODEL:-intfloat/e5-base-v2}"
+          --device "${MAPD_E5_DEVICE:-auto}"
+          --nprobe "${MAPD_E5_NPROBE:-64}"
+          --threads "${MAPD_E5_THREADS:-16}"
+        )
+        ;;
+      *)
+        echo "unsupported MAPD_RETRIEVER_BACKEND: $RETRIEVER_BACKEND" >&2
+        exit 2
+        ;;
+    esac
     bash "$PROJECT_ROOT/scripts/jobctl.sh" start retriever \
       "$VERL_VENV/bin/python" "$PROJECT_ROOT/scripts/serve_retriever.py" \
-      --index "$PROJECT_ROOT/data/wiki18/index/wiki18.sqlite3"
-    for _ in {1..30}; do
+      "${RETRIEVER_ARGS[@]}"
+    for _ in {1..120}; do
       if curl -fsS --connect-timeout 1 --max-time 2 http://127.0.0.1:8000/health; then
         echo
         exit 0

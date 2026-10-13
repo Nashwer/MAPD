@@ -12,7 +12,7 @@ that has actually run on the RTX 4090 D test instance. See
 | Evaluation | 7 QA datasets, EM, 5 seeds | Dataset names, strict EM, saved-trajectory aggregation implemented | Benchmark loaders and model inference runner pending |
 | Orchestrator | <=4 subtasks, dependency annotations, <=2 rounds | Implemented | Teacher prompt is a reconstruction |
 | Searcher | independent agents, <=3 queries each | Implemented | Parallel by ready DAG level |
-| Retrieval | wiki-18, top-3 | wiki-18 downloader, persistent SQLite FTS5/BM25 index, compatible HTTP service, and recall@3 smoke implemented | Full server build pending; default backend is sparse, not Search-R1 E5 dense retrieval |
+| Retrieval | wiki-18, top-3 | wiki-18 downloader, persistent SQLite FTS5/BM25, resumable E5-base-v2 IVF-PQ index, compatible HTTP service, and recall@3 smoke implemented | Default backend is sparse; compressed E5 is an unverified approximation, not the official Search-R1 dense index |
 | Candidate/EM | evidence-only answer then strict EM | Implemented | Answerer no longer receives GT |
 | Repair | GT diagnostic, expression/search, <=2 rounds | Implemented | GT is redacted from persisted diagnostics |
 | Protocolizer | Succeeded and Evidence variants | Implemented | Invalid raw JSON is retained for audit |
