@@ -271,7 +271,7 @@ passages through the encoder. A snapshot is written every one million passages;
 after interruption, the same command resumes at the last snapshot. Success is
 reported as `COMPRESSED E5 INDEX BUILD OK`.
 
-With the default `IVF16384,PQ96x8` settings, vector codes are about 2.0 GB for
+With the default `IVF4096,PQ96x8` settings, vector codes are about 2.0 GB for
 21M passages, plus IDs, IVF structures, model memory and build workspace. Plan
 for roughly 8–16 GB free RAM during construction and several GB of disk in
 addition to the SQLite document store. These are practical estimates, not a

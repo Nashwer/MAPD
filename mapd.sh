@@ -160,7 +160,7 @@ case ${1:-} in
       --model "${MAPD_E5_MODEL:-intfloat/e5-base-v2}" \
       --device "${MAPD_E5_DEVICE:-auto}" \
       --batch-size "${MAPD_E5_BATCH_SIZE:-128}" \
-      --nlist "${MAPD_E5_NLIST:-16384}" \
+      --nlist "${MAPD_E5_NLIST:-4096}" \
       --pq-m "${MAPD_E5_PQ_M:-96}" \
       --pq-nbits "${MAPD_E5_PQ_NBITS:-8}" \
       --train-size "${MAPD_E5_TRAIN_SIZE:-262144}" \

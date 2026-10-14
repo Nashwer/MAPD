@@ -188,7 +188,7 @@ def build_e5_ivfpq_index(
     device: str = "auto",
     batch_size: int = 128,
     passage_max_length: int = 180,
-    nlist: int = 16_384,
+    nlist: int = 4_096,
     pq_m: int = 96,
     pq_nbits: int = 8,
     train_size: int = 262_144,

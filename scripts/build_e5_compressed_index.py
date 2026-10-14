@@ -28,7 +28,7 @@ def main() -> int:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--passage-max-length", type=int, default=180)
-    parser.add_argument("--nlist", type=int, default=16_384)
+    parser.add_argument("--nlist", type=int, default=4_096)
     parser.add_argument("--pq-m", type=int, default=96)
     parser.add_argument("--pq-nbits", type=int, default=8)
     parser.add_argument("--train-size", type=int, default=262_144)
