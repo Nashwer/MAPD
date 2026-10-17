@@ -210,14 +210,30 @@ case ${1:-} in
     bash "$PROJECT_ROOT/scripts/jobctl.sh" start retriever \
       "$VERL_VENV/bin/python" "$PROJECT_ROOT/scripts/serve_retriever.py" \
       "${RETRIEVER_ARGS[@]}"
-    for _ in {1..120}; do
-      if curl -fsS --connect-timeout 1 --max-time 2 http://127.0.0.1:8000/health; then
-        echo
+    RETRIEVER_HEALTH_WAIT=120
+    [[ "$RETRIEVER_BACKEND" != "e5-ivfpq" ]] || RETRIEVER_HEALTH_WAIT=600
+    RETRIEVER_PID_FILE="$PROJECT_ROOT/.run/retriever.pid"
+    for ((attempt = 1; attempt <= RETRIEVER_HEALTH_WAIT; attempt++)); do
+      if HEALTH_RESPONSE=$(curl -fsS --connect-timeout 1 --max-time 2 \
+        http://127.0.0.1:8000/health 2>/dev/null); then
+        printf '%s\n' "$HEALTH_RESPONSE"
         exit 0
+      fi
+      if [[ -f "$RETRIEVER_PID_FILE" ]]; then
+        RETRIEVER_PID=$(<"$RETRIEVER_PID_FILE")
+        if [[ "$RETRIEVER_PID" =~ ^[0-9]+$ ]] && ! kill -0 "$RETRIEVER_PID" 2>/dev/null; then
+          echo "retriever exited before becoming healthy:" >&2
+          bash "$PROJECT_ROOT/scripts/jobctl.sh" logs retriever 100 >&2 || true
+          exit 1
+        fi
+      fi
+      if (( attempt % 30 == 0 )); then
+        echo "waiting for $RETRIEVER_BACKEND retriever: ${attempt}s/${RETRIEVER_HEALTH_WAIT}s"
       fi
       sleep 1
     done
-    echo "retriever did not become healthy; inspect: bash mapd.sh retrieval-logs" >&2
+    echo "retriever did not become healthy after ${RETRIEVER_HEALTH_WAIT}s:" >&2
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" logs retriever 100 >&2 || true
     exit 1
     ;;
   retrieval-status)
