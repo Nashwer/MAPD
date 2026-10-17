@@ -61,6 +61,10 @@ Commands:
   protocol-merge BUNDLE...  Merge and de-duplicate exported protocol bundles
   protocol-train-smoke OFFSET COUNT  Train on one real protocol shard and reload checkpoint
   protocol-train-start/status/logs/stop  Manage the real-protocol training smoke job
+  protocol-checkpoint-export OFFSET COUNT  Merge the smoke checkpoint into a vLLM-loadable model
+  student-eval VARIANT [COUNT] [MODEL]  Evaluate baseline/trained model on a fixed held-out cohort
+  student-eval-start/status/logs/stop VARIANT  Manage a held-out evaluation job
+  student-eval-compare [COUNT]  Compare paired baseline and trained evaluation runs
   paper-examples  Run Appendix A's three multi-hop examples through Qwen + wiki-18
   paper-examples-start/status/logs/stop  Manage the paper-example smoke job
   model-smoke  Load the local Qwen model and run one GPU inference
@@ -440,6 +444,127 @@ case ${1:-} in
     ;;
   protocol-train-stop)
     bash "$PROJECT_ROOT/scripts/jobctl.sh" stop protocol-train-smoke
+    ;;
+  protocol-checkpoint-export)
+    cd "$PROJECT_ROOT"
+    OFFSET=${2:-0}
+    COUNT=${3:-20}
+    BASE_MODEL=${4:-}
+    [[ "$OFFSET" =~ ^[0-9]+$ && "$COUNT" =~ ^[1-9][0-9]*$ ]] || {
+      echo "OFFSET must be nonnegative and COUNT must be positive" >&2
+      exit 2
+    }
+    TRAIN_OUTPUT="$PROJECT_ROOT/artifacts/protocol_train_smoke/offset_${OFFSET}_count_${COUNT}_${PROTOCOL_RUN_TAG}_action_v4"
+    EXPORT_ARGS=()
+    [[ -z "$BASE_MODEL" ]] || EXPORT_ARGS+=(--base-model "$BASE_MODEL")
+    "$VERL_VENV/bin/python" scripts/export_smoke_checkpoint.py \
+      --checkpoint "$TRAIN_OUTPUT/checkpoint-final/checkpoint.pt" \
+      --output-dir "$TRAIN_OUTPUT/checkpoint-final/hf-model" \
+      "${EXPORT_ARGS[@]}"
+    ;;
+  student-eval)
+    cd "$PROJECT_ROOT"
+    VARIANT=${2:-baseline}
+    EVAL_COUNT=${3:-200}
+    MODEL_PATH=${4:-}
+    EVAL_SEED=${MAPD_EVAL_SEED:-2026}
+    [[ "$VARIANT" =~ ^[A-Za-z0-9._-]+$ ]] || {
+      echo "VARIANT may contain only letters, digits, dot, underscore, and hyphen" >&2
+      exit 2
+    }
+    [[ "$EVAL_COUNT" =~ ^[1-9][0-9]*$ && "$EVAL_SEED" =~ ^-?[0-9]+$ ]] || {
+      echo "COUNT must be positive and MAPD_EVAL_SEED must be an integer" >&2
+      exit 2
+    }
+    if [[ -z "$MODEL_PATH" ]]; then
+      case "$VARIANT" in
+        baseline)
+          MODEL_PATH=${MAPD_MODEL_PATH:-"$HOME/models/Qwen3-1.7B"}
+          ;;
+        trained)
+          TRAIN_OFFSET=${MAPD_EVAL_TRAIN_OFFSET:-0}
+          TRAIN_COUNT=${MAPD_EVAL_TRAIN_COUNT:-20}
+          MODEL_PATH="$PROJECT_ROOT/artifacts/protocol_train_smoke/offset_${TRAIN_OFFSET}_count_${TRAIN_COUNT}_${PROTOCOL_RUN_TAG}_action_v4/checkpoint-final/hf-model"
+          ;;
+        *)
+          echo "MODEL is required for evaluation variant '$VARIANT'" >&2
+          exit 2
+          ;;
+      esac
+    fi
+    [[ -s "$MODEL_PATH/config.json" ]] || {
+      echo "loadable model not found: $MODEL_PATH" >&2
+      echo "for the trained variant, run: bash mapd.sh protocol-checkpoint-export 0 20" >&2
+      exit 1
+    }
+    EVAL_DATA=${MAPD_EVAL_DATA:-$PROJECT_ROOT/data/evaluation/searchr1_test.jsonl}
+    TRAIN_DATA=${MAPD_FULL_TRAIN_DATA:-$PROJECT_ROOT/data/training/mapd_train_25600.jsonl}
+    [[ -s "$EVAL_DATA" ]] || { echo "held-out evaluation data not found: $EVAL_DATA" >&2; exit 1; }
+    [[ -s "$TRAIN_DATA" ]] || { echo "training data not found: $TRAIN_DATA" >&2; exit 1; }
+    if ! curl -fsS --connect-timeout 1 --max-time 3 http://127.0.0.1:8000/health >/dev/null; then
+      echo "retriever is not healthy; run: bash mapd.sh retrieval-start" >&2
+      exit 1
+    fi
+    OUTPUT_DIR="$PROJECT_ROOT/artifacts/student_eval/${VARIANT}_count_${EVAL_COUNT}_seed${EVAL_SEED}_${PROTOCOL_RUN_TAG}"
+    RETRIEVER_BACKEND=${MAPD_RETRIEVER_BACKEND:-sqlite-fts5}
+    case "$RETRIEVER_BACKEND" in
+      e5-ivfpq)
+        RETRIEVER_INDEX=${MAPD_E5_INDEX:-$PROJECT_ROOT/data/wiki18/e5_ivfpq/wiki18_e5_ivfpq.faiss}
+        RETRIEVER_IDENTITY_ARGS=(--retriever-nprobe "${MAPD_E5_NPROBE:-64}")
+        ;;
+      sqlite-fts5)
+        RETRIEVER_INDEX=${MAPD_FTS_INDEX:-$PROJECT_ROOT/data/wiki18/index/wiki18.sqlite3}
+        RETRIEVER_IDENTITY_ARGS=()
+        ;;
+      *)
+        echo "unsupported MAPD_RETRIEVER_BACKEND: $RETRIEVER_BACKEND" >&2
+        exit 2
+        ;;
+    esac
+    [[ -s "$RETRIEVER_INDEX" ]] || { echo "retriever index not found: $RETRIEVER_INDEX" >&2; exit 1; }
+    "$VERL_VENV/bin/python" scripts/student_eval.py \
+      --model "$MODEL_PATH" \
+      --qa "$EVAL_DATA" \
+      --training-data "$TRAIN_DATA" \
+      --output-dir "$OUTPUT_DIR" \
+      --retriever-url "${MAPD_RETRIEVER_URL:-http://127.0.0.1:8000/retrieve}" \
+      --retriever-backend "$RETRIEVER_BACKEND" \
+      --retriever-index "$RETRIEVER_INDEX" \
+      "${RETRIEVER_IDENTITY_ARGS[@]}" \
+      --count "$EVAL_COUNT" \
+      --seed "$EVAL_SEED"
+    ;;
+  student-eval-start)
+    VARIANT=${2:-baseline}
+    EVAL_COUNT=${3:-200}
+    MODEL_PATH=${4:-}
+    [[ "$VARIANT" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid VARIANT" >&2; exit 2; }
+    EVAL_COMMAND=(bash "$PROJECT_ROOT/mapd.sh" student-eval "$VARIANT" "$EVAL_COUNT")
+    [[ -z "$MODEL_PATH" ]] || EVAL_COMMAND+=("$MODEL_PATH")
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" start "student-eval-$VARIANT" "${EVAL_COMMAND[@]}"
+    ;;
+  student-eval-status)
+    VARIANT=${2:-baseline}
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" status "student-eval-$VARIANT"
+    ;;
+  student-eval-logs)
+    VARIANT=${2:-baseline}
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" logs "student-eval-$VARIANT" 100
+    ;;
+  student-eval-stop)
+    VARIANT=${2:-baseline}
+    bash "$PROJECT_ROOT/scripts/jobctl.sh" stop "student-eval-$VARIANT"
+    ;;
+  student-eval-compare)
+    cd "$PROJECT_ROOT"
+    EVAL_COUNT=${2:-200}
+    EVAL_SEED=${MAPD_EVAL_SEED:-2026}
+    BASELINE_DIR="$PROJECT_ROOT/artifacts/student_eval/baseline_count_${EVAL_COUNT}_seed${EVAL_SEED}_${PROTOCOL_RUN_TAG}"
+    TRAINED_DIR="$PROJECT_ROOT/artifacts/student_eval/trained_count_${EVAL_COUNT}_seed${EVAL_SEED}_${PROTOCOL_RUN_TAG}"
+    "$VERL_VENV/bin/python" scripts/compare_student_evals.py \
+      --baseline "$BASELINE_DIR/rollouts.jsonl" \
+      --trained "$TRAINED_DIR/rollouts.jsonl" \
+      --output "$PROJECT_ROOT/exports/student_eval_count_${EVAL_COUNT}_seed${EVAL_SEED}_${PROTOCOL_RUN_TAG}"
     ;;
   paper-examples)
     cd "$PROJECT_ROOT"
