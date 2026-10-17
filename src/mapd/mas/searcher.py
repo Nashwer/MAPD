@@ -24,11 +24,17 @@ class Searcher:
         subtask: SubTask,
         findings: list[SearchFinding],
         forbidden_answers: list[str],
+        previous_queries: list[str] | None = None,
     ) -> tuple[list[SearchRecord], SearchFinding]:
         dependencies = [item for item in findings if item.subtask_id in subtask.depends_on]
+        previous_queries = previous_queries or []
+        excluded_queries = {
+            normalize_answer(query) for query in previous_queries if normalize_answer(query)
+        }
         base_payload = {
             "subtask": subtask.model_dump(mode="json"),
             "dependency_findings": [item.model_dump(mode="json") for item in dependencies],
+            "previous_queries": previous_queries[-24:],
             "max_queries": self.max_queries,
         }
         queries: list[str] = []
@@ -47,7 +53,9 @@ class Searcher:
             query_value = result.get("queries", [])
             if not isinstance(query_value, list):
                 raise TypeError("searcher queries must be a JSON array")
-            queries = self._usable_queries(query_value, forbidden_answers)
+            queries = self._usable_queries(
+                query_value, forbidden_answers, excluded_queries=excluded_queries
+            )
             if queries:
                 break
 
@@ -55,6 +63,13 @@ class Searcher:
             # The orchestrator objective is available without consulting the
             # ground truth, so it is a safe last-resort retrieval query when it
             # independently passes the same leak guard.
+            queries = self._usable_queries(
+                [subtask.objective], forbidden_answers, excluded_queries=excluded_queries
+            )
+        if not queries:
+            # Do not reject an otherwise valid sample merely because the model
+            # failed to produce a novel query. Reusing the safe objective is a
+            # last resort after all novelty-aware retries have been exhausted.
             queries = self._usable_queries([subtask.objective], forbidden_answers)
         if not queries:
             raise ValueError(
@@ -95,13 +110,25 @@ class Searcher:
             evidence_ids=evidence_ids,
         )
 
-    def _usable_queries(self, values: list[Any], forbidden_answers: list[str]) -> list[str]:
+    def _usable_queries(
+        self,
+        values: list[Any],
+        forbidden_answers: list[str],
+        *,
+        excluded_queries: set[str] | None = None,
+    ) -> list[str]:
         queries: list[str] = []
         seen: set[str] = set()
+        excluded_queries = excluded_queries or set()
         for item in values[: self.max_queries]:
             query = str(item).strip()
             key = normalize_answer(query)
-            if key and key not in seen and not contains_answer(query, forbidden_answers):
+            if (
+                key
+                and key not in seen
+                and key not in excluded_queries
+                and not contains_answer(query, forbidden_answers)
+            ):
                 queries.append(query)
                 seen.add(key)
         return queries

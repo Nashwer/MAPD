@@ -79,3 +79,40 @@ def test_searcher_still_fails_when_objective_leaks_oracle_answer():
 
     with pytest.raises(ValueError, match="original objective also failed"):
         _run_search(teacher, objective="Find why the answer is athletics director")
+
+
+def test_searcher_rejects_queries_already_used_in_previous_rounds():
+    teacher = RetryTeacher(
+        [
+            {"queries": ["generic award winners"]},
+            {"queries": ["50 Cent Billboard Top Artist wins"]},
+        ]
+    )
+    retriever = RecordingRetriever()
+    searcher = Searcher(teacher, retriever, max_queries=3, top_k=1)
+
+    searches, _ = searcher.run(
+        SubTask(
+            id="s2",
+            objective="Verify the award-to-artist relation",
+            depends_on=["s1"],
+        ),
+        [
+            SearchFinding(
+                subtask_id="s1",
+                summary="The bridge candidate is 50 Cent.",
+                evidence_ids=[],
+            )
+        ],
+        ["investor"],
+        ["generic award winners"],
+    )
+
+    assert retriever.queries == ["50 Cent Billboard Top Artist wins"]
+    assert searches[0].query == retriever.queries[0]
+    assert teacher.searcher_payloads[0]["previous_queries"] == [
+        "generic award winners"
+    ]
+    assert teacher.searcher_payloads[0]["dependency_findings"][0]["summary"] == (
+        "The bridge candidate is 50 Cent."
+    )

@@ -14,7 +14,7 @@ export HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
 export HF_HOME=${HF_HOME:-"$HOME/cache/huggingface"}
 export HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT:-1200}
 export HF_HUB_ETAG_TIMEOUT=${HF_HUB_ETAG_TIMEOUT:-60}
-PROTOCOL_SYNTHESIS_REVISION=8
+PROTOCOL_SYNTHESIS_REVISION=10
 if [[ -f "$PROJECT_ROOT/scripts/bootstrap_versions.env" ]]; then
   # shellcheck source=scripts/bootstrap_versions.env
   source "$PROJECT_ROOT/scripts/bootstrap_versions.env"

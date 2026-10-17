@@ -16,10 +16,18 @@ class Protocolizer:
     def generate(
         self, exploration: ExplorationLog
     ) -> tuple[StructuredProtocol | None, dict[str, Any], list[str]]:
+        cited_ids = {
+            evidence_id
+            for finding in exploration.findings
+            for evidence_id in finding.evidence_ids
+        }
         unique_passages: dict[str, dict[str, Any]] = {}
         for search in exploration.searches:
             for passage in search.passages:
-                unique_passages.setdefault(passage.id, passage.model_dump(mode="json"))
+                if not cited_ids or passage.id in cited_ids:
+                    unique_passages.setdefault(
+                        passage.id, passage.model_dump(mode="json")
+                    )
         raw = self.teacher.generate_json(
             "protocolizer",
             {

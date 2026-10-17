@@ -34,7 +34,7 @@ from mapd.trainer.opsd import select_privileged_information
 
 app = typer.Typer(no_args_is_help=True, help="MAPD reproduction utilities")
 ARTIFACT_SCHEMA_VERSION = 3
-SYNTHESIS_REVISION = 9
+SYNTHESIS_REVISION = 10
 
 
 def _build_teacher(
@@ -289,6 +289,23 @@ def _run_synthesis(config: AppConfig, samples: list[QASample], output_dir: Path)
         "synthesis_revision": SYNTHESIS_REVISION,
         "synthesis_workers": config.run.synthesis_workers,
         "teacher_max_concurrency": config.teacher.max_concurrency,
+        "teacher_config": {
+            "backend": config.teacher.backend,
+            "model": config.teacher.model,
+            "thinking_mode": config.teacher.thinking_mode,
+            "max_output_tokens": config.teacher.max_output_tokens,
+        },
+        "retrieval_config": config.retrieval.model_dump(mode="json"),
+        "retrieval_runtime": {
+            key: value
+            for key in (
+                "MAPD_RETRIEVER_BACKEND",
+                "MAPD_E5_INDEX",
+                "MAPD_E5_NPROBE",
+            )
+            if (value := os.getenv(key))
+        },
+        "mas_config": config.mas.model_dump(mode="json"),
     }
     if isinstance(teacher, OpenAICompatibleTeacher):
         manifest["teacher_usage"] = teacher.usage_summary()

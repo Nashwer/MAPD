@@ -56,7 +56,7 @@ class MASPipeline:
             if not proposed:
                 break
             new_searches, new_findings = self._execute_dependency_graph(
-                proposed, findings, forbidden_answers
+                proposed, findings, forbidden_answers, searches
             )
             subtasks.extend(proposed)
             searches.extend(new_searches)
@@ -79,9 +79,22 @@ class MASPipeline:
             )
             repairs.append(repair_record)
             if not proposed:
+                if repair_record.failure_type == "expression":
+                    candidate = self._answer(
+                        sample.question,
+                        searches,
+                        findings,
+                        revision_instruction=repair_record.diagnosis,
+                    )
+                    success = exact_match(candidate, sample.answers)
+                    if success:
+                        break
+                    # A second bounded repair pass may diagnose a remaining
+                    # expression issue without paying for redundant searches.
+                    continue
                 break
             new_searches, new_findings = self._execute_dependency_graph(
-                proposed, findings, forbidden_answers
+                proposed, findings, forbidden_answers, searches
             )
             subtasks.extend(proposed)
             searches.extend(new_searches)
@@ -123,7 +136,9 @@ class MASPipeline:
         subtasks: list[SubTask],
         prior_findings: list[SearchFinding],
         forbidden_answers: list[str],
+        prior_searches: list[SearchRecord] | None = None,
     ) -> tuple[list[SearchRecord], list[SearchFinding]]:
+        prior_searches = prior_searches or []
         pending = {item.id: item for item in subtasks}
         completed = {item.subtask_id for item in prior_findings}
         searches, findings = [], []
@@ -135,7 +150,12 @@ class MASPipeline:
             with ThreadPoolExecutor(max_workers=min(len(ready), self.config.max_subquestions)) as executor:
                 results = list(
                     executor.map(
-                        lambda task: self.searcher.run(task, available, forbidden_answers),
+                        lambda task: self.searcher.run(
+                            task,
+                            available,
+                            forbidden_answers,
+                            [item.query for item in prior_searches + searches],
+                        ),
                         ready,
                     )
                 )
@@ -147,19 +167,33 @@ class MASPipeline:
         return searches, findings
 
     def _answer(
-        self, question: str, searches: list[SearchRecord], findings: list[SearchFinding]
+        self,
+        question: str,
+        searches: list[SearchRecord],
+        findings: list[SearchFinding],
+        *,
+        revision_instruction: str | None = None,
     ) -> str | None:
+        cited_ids = {
+            evidence_id for finding in findings for evidence_id in finding.evidence_ids
+        }
+        unique_passages = {}
+        for search in searches:
+            for passage in search.passages:
+                if not cited_ids or passage.id in cited_ids:
+                    unique_passages.setdefault(
+                        passage.id, passage.model_dump(mode="json")
+                    )
+        payload = {
+            "question": question,
+            "findings": [item.model_dump(mode="json") for item in findings],
+            "passages": list(unique_passages.values()),
+        }
+        if revision_instruction:
+            payload["revision_instruction"] = revision_instruction
         result = self.teacher.generate_json(
             "answerer",
-            {
-                "question": question,
-                "findings": [item.model_dump(mode="json") for item in findings],
-                "passages": [
-                    passage.model_dump(mode="json")
-                    for search in searches
-                    for passage in search.passages
-                ],
-            },
+            payload,
         )
         answer = result.get("answer")
         return str(answer).strip() if answer is not None else None

@@ -22,28 +22,49 @@ ROLE_INSTRUCTIONS = {
     "orchestrator": (
         "Classify and decompose the question into dependency-aware subtasks. "
         "Use task_type=single_hop for one direct fact, multi_hop for linked facts, comparison for "
-        "explicit comparisons, and others only when none applies. Do not reveal the answer. "
+        "explicit comparisons, and others only when none applies. For multi-hop questions, first "
+        "retrieve the bridge entity or relation, then make each downstream subtask depend_on the "
+        "subtask that supplies it. On later rounds, use previous_findings to target only the missing "
+        "edge; do not repeat completed objectives as paraphrases. Do not reveal the answer. "
         "Return exactly {\"task_type\":\"single_hop|multi_hop|comparison|others\","
         "\"subtasks\":[{\"id\":\"s1\",\"objective\":\"...\",\"depends_on\":[]}]}."
     ),
     "searcher": (
         "Produce up to max_queries retrieval queries for the objective. Do not include an oracle answer. "
+        "When dependency_findings are present, include their concrete bridge entity or fact together "
+        "with the unresolved target relation in every query. Prefer complementary query strategies "
+        "over minor paraphrases, and do not repeat previous_queries. For list, ranking, award, album "
+        "track, or other relation-heavy questions, search for the named page/entity plus the exact "
+        "relation needed rather than a generic topic. "
         "When retry_instruction is present, follow it and substantially rewrite the rejected candidates. "
         "Return exactly {\"queries\":[\"query\"]}; queries must be a non-empty string array."
     ),
     "search_summarizer": (
         "Compress the retrieved passages into one concise, non-empty supported finding. Cite only ids "
-        "present in passages. Return exactly {\"summary\":\"...\",\"evidence_ids\":[\"id\"]}. "
+        "present in passages. Preserve the exact entity names, dates, units, eras, occupations, and "
+        "relations needed by the subtask; explicitly say when the required relation is absent. "
+        "Return exactly {\"summary\":\"...\",\"evidence_ids\":[\"id\"]}. "
         "If passages is non-empty, evidence_ids must be non-empty."
     ),
     "answerer": (
         "Infer the shortest answer strictly from findings and passages. You do not receive ground truth. "
-        "Use null when evidence is insufficient. Return exactly {\"answer\":\"short answer\"} or "
+        "Copy the shortest complete answer span and retain qualifiers required by the question, such "
+        "as the full relation name, date era, unit, or occupation. Use null only when the critical "
+        "relation is absent, not merely because other retrieved passages are irrelevant. If evidence "
+        "explicitly establishes that an author or identity is unknown or that a work is traditional "
+        "with no known individual author, return \"Unknown\" rather than null. When "
+        "revision_instruction is present, correct the diagnosed expression problem using only the "
+        "existing evidence; [REDACTED] is never an answer hint. Return exactly "
+        "{\"answer\":\"short answer\"} or "
         "{\"answer\":null}."
     ),
     "repair": (
         "Use ground truth only to diagnose expression versus search failure. Do not put the answer in "
-        "objectives. Return exactly {\"failure_type\":\"expression|search\",\"diagnosis\":\"...\","
+        "objectives. If existing findings contain sufficient evidence and only the answer wording is "
+        "wrong or incomplete, use failure_type=expression, describe what must be corrected without "
+        "revealing the answer, and return no subtasks. For search failures, create dependency-aware "
+        "subtasks that target the exact missing bridge or relation and do not merely paraphrase prior "
+        "queries. Return exactly {\"failure_type\":\"expression|search\",\"diagnosis\":\"...\","
         "\"subtasks\":[{\"id\":\"s1\",\"objective\":\"...\",\"depends_on\":[]}]}."
     ),
     "protocolizer": (
