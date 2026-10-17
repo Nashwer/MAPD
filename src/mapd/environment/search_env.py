@@ -189,7 +189,14 @@ class AgenticSearchEnvironment:
             system_prompt=self.system_prompt,
             turns=turns,
             final_answer=final_answer,
-            reward=float(exact_match(final_answer, sample.answers)),
+            # A later correction must not turn malformed model output into a
+            # positive GRPO sample.  Keep the complete trajectory for learning,
+            # but score every trajectory containing an invalid action as zero.
+            reward=(
+                0.0
+                if any(turn.action == "invalid" for turn in turns)
+                else float(exact_match(final_answer, sample.answers))
+            ),
             terminated=terminated,
         )
 

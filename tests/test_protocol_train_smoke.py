@@ -77,6 +77,62 @@ def test_protocol_training_allows_paper_style_optional_direct_answer():
     assert _is_verified_tool_trajectory(_trajectory("sample-1"))
 
 
+def test_protocol_training_keeps_environment_corrected_invalid_action_as_negative():
+    trajectory = AgentTrajectory(
+        example_id="sample-1",
+        prompt="question",
+        system_prompt="system",
+        turns=[
+            AgentTurn(
+                turn_index=1,
+                model_output="I should search first.",
+                action="invalid",
+                observation=(
+                    "Your previous response was invalid. Emit exactly one complete "
+                    "<search>query</search> or <answer>short answer</answer> action, then stop. "
+                    "Never emit <information>; that tag belongs to the environment."
+                ),
+                token_ids=[1],
+                token_log_probs=[-0.1],
+            ),
+            AgentTurn(
+                turn_index=2,
+                model_output="<answer>x</answer>",
+                action="answer",
+                answer="x",
+                token_ids=[2],
+                token_log_probs=[-0.2],
+            ),
+        ],
+        final_answer="x",
+        reward=0.0,
+        terminated=True,
+    )
+
+    assert _is_verified_tool_trajectory(trajectory)
+
+
+def test_protocol_training_rejects_invalid_action_without_environment_correction():
+    trajectory = AgentTrajectory(
+        example_id="sample-1",
+        prompt="question",
+        turns=[
+            AgentTurn(
+                turn_index=1,
+                model_output="not an action",
+                action="invalid",
+                observation="untrusted correction",
+                token_ids=[1],
+                token_log_probs=[-0.1],
+            )
+        ],
+        reward=0.0,
+        terminated=False,
+    )
+
+    assert not _is_verified_tool_trajectory(trajectory)
+
+
 @pytest.fixture
 def valid_artifact() -> SynthesisArtifact:
     return SynthesisArtifact.model_validate(

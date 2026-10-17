@@ -11,7 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from mapd.environment.schema import AgentTrajectory
-from mapd.environment.search_env import AGENT_SYSTEM_PROMPT, AgenticSearchEnvironment
+from mapd.environment.search_env import (
+    AGENT_SYSTEM_PROMPT,
+    INVALID_ACTION_CORRECTION,
+    AgenticSearchEnvironment,
+)
 from mapd.environment.vllm_policy import VLLMStudentPolicy
 from mapd.io import read_jsonl, write_jsonl
 from mapd.mas.schema import SynthesisArtifact
@@ -214,9 +218,12 @@ def _validate_group(
     for trajectory in trajectories:
         if trajectory.example_id != example_id:
             raise ValueError("rollout group contains multiple example ids")
-        if not _is_verified_tool_trajectory(trajectory):
+        validation_error = _trajectory_validation_error(trajectory)
+        if validation_error:
+            actions = ",".join(turn.action for turn in trajectory.turns) or "<none>"
             raise RuntimeError(
-                f"example {example_id!r} produced an invalid agent trajectory"
+                f"example {example_id!r} produced an invalid agent trajectory: "
+                f"{validation_error}; actions={actions}"
             )
         for turn in trajectory.turns:
             if turn.token_ids is None or turn.token_log_probs is None:
@@ -224,22 +231,34 @@ def _validate_group(
 
 
 def _is_verified_tool_trajectory(trajectory: AgentTrajectory) -> bool:
+    return _trajectory_validation_error(trajectory) is None
+
+
+def _trajectory_validation_error(trajectory: AgentTrajectory) -> str | None:
     if not trajectory.turns:
-        return False
+        return "trajectory contains no turns"
     if trajectory.terminated:
         if trajectory.final_answer is None or trajectory.turns[-1].action != "answer":
-            return False
-    elif trajectory.final_answer is not None or trajectory.turns[-1].action != "search":
-        return False
-    if any(turn.action == "invalid" for turn in trajectory.turns):
-        return False
+            return "terminated trajectory does not end in an answer"
+    elif trajectory.final_answer is not None:
+        return "unterminated trajectory unexpectedly contains a final answer"
+    elif trajectory.turns[-1].action not in {"search", "invalid"}:
+        return "unterminated trajectory has an unsupported final action"
     if any("<information>" in turn.model_output.lower() for turn in trajectory.turns):
-        return False
+        return "model output contains a forged information block"
     search_turns = [turn for turn in trajectory.turns if turn.action == "search"]
-    return all(
+    if not all(
         turn.query and turn.observation and turn.observation.startswith("<information>")
         for turn in search_turns
-    )
+    ):
+        return "search action lacks an environment-owned observation"
+    invalid_turns = [turn for turn in trajectory.turns if turn.action == "invalid"]
+    if not all(
+        turn.observation and turn.observation.startswith(INVALID_ACTION_CORRECTION)
+        for turn in invalid_turns
+    ):
+        return "invalid action lacks an environment-owned correction"
+    return None
 
 
 def _write_manifest(

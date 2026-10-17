@@ -68,7 +68,7 @@ def test_required_search_reprompts_an_early_answer_before_using_tool():
     )
 
     assert [turn.action for turn in trajectory.turns] == ["invalid", "search", "answer"]
-    assert trajectory.reward == 1.0
+    assert trajectory.reward == 0.0
 
 
 def test_agent_can_chain_three_searches_for_a_paper_style_multihop_question():
