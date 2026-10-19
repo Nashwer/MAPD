@@ -74,6 +74,7 @@ def main() -> int:
             "available": torch.cuda.is_available(),
             "torch_runtime": torch.version.cuda,
             "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+            "visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
             "nvcc": command(["nvcc", "--version"]),
         },
         "git": {
@@ -85,6 +86,13 @@ def main() -> int:
             "verl": str(verl_root),
             "model": str(model_root),
             "model_ready": (model_root / "config.json").is_file(),
+            "storage_root": os.environ.get("MAPD_STORAGE_ROOT"),
+            "cache_root": os.environ.get("MAPD_CACHE_ROOT"),
+        },
+        "services": {
+            "retriever_url": os.environ.get("MAPD_RETRIEVER_URL"),
+            "retriever_health_url": os.environ.get("MAPD_RETRIEVER_HEALTH_URL"),
+            "retriever_backend": os.environ.get("MAPD_RETRIEVER_BACKEND"),
         },
     }
     output = project_root / "artifacts" / "environment" / "manifest.json"

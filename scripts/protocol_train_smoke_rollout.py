@@ -32,7 +32,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--artifacts", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--retriever-url", default="http://127.0.0.1:8000/retrieve")
+    parser.add_argument(
+        "--retriever-url",
+        default=os.environ.get("MAPD_RETRIEVER_URL", "http://127.0.0.1:8000/retrieve"),
+    )
     parser.add_argument("--group-size", type=int, default=8)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int, default=3)

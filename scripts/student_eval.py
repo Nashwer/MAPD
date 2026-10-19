@@ -190,7 +190,10 @@ def main() -> int:
     parser.add_argument("--qa", type=Path, required=True)
     parser.add_argument("--training-data", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--retriever-url", default="http://127.0.0.1:8000/retrieve")
+    parser.add_argument(
+        "--retriever-url",
+        default=os.environ.get("MAPD_RETRIEVER_URL", "http://127.0.0.1:8000/retrieve"),
+    )
     parser.add_argument("--retriever-backend", required=True)
     parser.add_argument("--retriever-index", type=Path, required=True)
     parser.add_argument("--retriever-nprobe", type=int)

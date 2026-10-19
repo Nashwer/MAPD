@@ -13,10 +13,14 @@ source "$VERSIONS_FILE"
 
 VERL_ROOT=${VERL_ROOT:-"$WORKSPACE_ROOT/verl"}
 VERL_VENV=${VERL_VENV:-"$VERL_ROOT/.venv"}
-MODEL_ROOT=${MAPD_MODEL_PATH:-"$HOME/models/${MAPD_MODEL_ID##*/}"}
+MAPD_STORAGE_ROOT=${MAPD_STORAGE_ROOT:-"$HOME"}
+MAPD_CACHE_ROOT=${MAPD_CACHE_ROOT:-"$MAPD_STORAGE_ROOT/cache"}
+MODEL_ROOT=${MAPD_MODEL_PATH:-"${MAPD_MODEL_ROOT:-$MAPD_STORAGE_ROOT/models}/${MAPD_MODEL_ID##*/}"}
 VERL_REF=${VERL_REF:-$MAPD_VERL_REF}
-UV_CACHE_DIR=${UV_CACHE_DIR:-"$HOME/cache/uv"}
-HF_HOME=${HF_HOME:-"$HOME/cache/huggingface"}
+UV_CACHE_DIR=${UV_CACHE_DIR:-"$MAPD_CACHE_ROOT/uv"}
+HF_HOME=${HF_HOME:-"$MAPD_CACHE_ROOT/huggingface"}
+PIP_CACHE_DIR=${PIP_CACHE_DIR:-"$MAPD_CACHE_ROOT/pip"}
+TMPDIR=${TMPDIR:-"$MAPD_STORAGE_ROOT/tmp"}
 HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
 UV_DEFAULT_INDEX=${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
 UV_HTTP_TIMEOUT=${UV_HTTP_TIMEOUT:-1200}
@@ -26,7 +30,9 @@ SKIP_MODEL=0
 SKIP_VERIFY=0
 SUDO=()
 if (( EUID != 0 )); then
-  SUDO=(sudo)
+  if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+    SUDO=(sudo -n)
+  fi
 fi
 
 for argument in "$@"; do
@@ -41,16 +47,26 @@ for argument in "$@"; do
   esac
 done
 
-mkdir -p "$PROJECT_ROOT/logs" "$UV_CACHE_DIR" "$HF_HOME" "$(dirname "$MODEL_ROOT")"
+mkdir -p "$PROJECT_ROOT/logs" "$UV_CACHE_DIR" "$HF_HOME" "$PIP_CACHE_DIR" \
+  "$TMPDIR" "$(dirname "$MODEL_ROOT")"
 BOOTSTRAP_LOG="$PROJECT_ROOT/logs/bootstrap-$(date -u +%Y%m%dT%H%M%SZ).log"
 exec > >(tee -a "$BOOTSTRAP_LOG") 2>&1
 
 trap 'echo "BOOTSTRAP FAILED at line $LINENO. Log: $BOOTSTRAP_LOG" >&2' ERR
 
-export VERL_ROOT VERL_VENV CUDA_HOME=${CUDA_HOME:-"/usr/local/cuda-$MAPD_CUDA_SERIES"}
+if [[ -z "${CUDA_HOME:-}" ]] && command -v nvcc >/dev/null 2>&1; then
+  CUDA_NVCC=$(readlink -f "$(command -v nvcc)")
+  CUDA_HOME=$(dirname "$(dirname "$CUDA_NVCC")")
+elif [[ -z "${CUDA_HOME:-}" && -x /usr/local/cuda/bin/nvcc ]]; then
+  CUDA_HOME=/usr/local/cuda
+else
+  CUDA_HOME=${CUDA_HOME:-"/usr/local/cuda-$MAPD_CUDA_SERIES"}
+fi
+export MAPD_STORAGE_ROOT MAPD_CACHE_ROOT MODEL_ROOT PIP_CACHE_DIR TMPDIR
+export VERL_ROOT VERL_VENV CUDA_HOME
 export PATH="$CUDA_HOME/bin:$HOME/.local/bin:$PATH"
 export UV_CACHE_DIR HF_HOME HF_ENDPOINT UV_DEFAULT_INDEX UV_HTTP_TIMEOUT
-export UV_CONCURRENT_DOWNLOADS PIP_INDEX_URL
+export UV_CONCURRENT_DOWNLOADS PIP_INDEX_URL PIP_CACHE_DIR TMPDIR
 export MAPD_BOOTSTRAP_SCHEMA MAPD_VERL_REF MAPD_MODEL_ID MAPD_NUMPY_VERSION
 export MAPD_CUDA_SERIES MAPD_QA_REVISION MAPD_WIKI18_REVISION MAPD_WIKI18_E5_REVISION
 
@@ -62,43 +78,41 @@ section() {
 check_base_image() {
   section "0/5 base image contract"
   if [[ ! -r /etc/os-release ]]; then
-    echo "ERROR: /etc/os-release is unavailable; Ubuntu 24.04 is required." >&2
+    echo "ERROR: /etc/os-release is unavailable; Ubuntu 22.04 or 24.04 is required." >&2
     exit 8
   fi
 
-  # The checked-out MAPD repository, Bash, apt/sudo and the NVIDIA driver are
-  # the only assumed inputs. Everything else is installed below.
+  # Shared servers may provide the complete build stack without sudo.  Missing
+  # packages are installed only when root or passwordless sudo is available.
   # shellcheck source=/etc/os-release
   source /etc/os-release
-  if [[ "${ID:-}" != ubuntu || "${VERSION_ID:-}" != 24.04 ]]; then
-    echo "ERROR: expected Ubuntu 24.04, found ${PRETTY_NAME:-unknown}." >&2
+  if [[ "${ID:-}" != ubuntu || ! "${VERSION_ID:-}" =~ ^(22\.04|24\.04)$ ]]; then
+    echo "ERROR: expected Ubuntu 22.04 or 24.04, found ${PRETTY_NAME:-unknown}." >&2
     exit 8
   fi
   if [[ "$(uname -m)" != x86_64 ]]; then
     echo "ERROR: expected x86_64, found $(uname -m)." >&2
     exit 8
   fi
-  for command_name in bash apt-get apt-cache nvidia-smi; do
+  for command_name in bash apt-get apt-cache nvidia-smi python3; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
       echo "ERROR: base image must provide $command_name." >&2
       exit 9
     fi
   done
-  if (( EUID != 0 )) && ! command -v sudo >/dev/null 2>&1; then
-    echo "ERROR: a non-root account must provide sudo." >&2
-    exit 9
-  fi
-
   echo "Base image: $PRETTY_NAME ($(uname -m))"
   nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
 }
 
 have_system_stack() {
-  [[ -f /usr/include/python3.12/Python.h ]] &&
-    command -v curl >/dev/null 2>&1 &&
+  # veRL's uv environment supplies its own Python.  Requiring the system
+  # Python headers here would unnecessarily reject managed shared servers
+  # where all runtime dependencies are installed from binary wheels.
+  command -v curl >/dev/null 2>&1 &&
     command -v git >/dev/null 2>&1 &&
     command -v gcc >/dev/null 2>&1 &&
     command -v ninja >/dev/null 2>&1 &&
+    command -v cmake >/dev/null 2>&1 &&
     [[ -x "$CUDA_HOME/bin/nvcc" ]] &&
     [[ -f "$CUDA_HOME/include/curand.h" ]]
 }
@@ -110,21 +124,30 @@ install_system_stack() {
     return
   fi
 
+  if (( EUID != 0 )) && (( ${#SUDO[@]} == 0 )); then
+    echo "ERROR: the shared host is missing build prerequisites and this account has no passwordless sudo." >&2
+    echo "Ask the administrator to install: build-essential ninja-build cmake CUDA compiler and cuRAND headers." >&2
+    echo "Detected CUDA_HOME: $CUDA_HOME" >&2
+    exit 10
+  fi
+
   "${SUDO[@]}" apt-get update
   "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y \
     ca-certificates \
     curl \
     git \
     build-essential \
-    python3.12-dev \
-    ninja-build
+    python3-dev \
+    ninja-build \
+    cmake
 
   local cuda_suffix=${MAPD_CUDA_SERIES/./-}
   if ! apt-cache show "cuda-compiler-$cuda_suffix" >/dev/null 2>&1; then
-    local keyring
+    local keyring ubuntu_repo
+    ubuntu_repo="ubuntu${VERSION_ID//./}"
     keyring=$(mktemp --suffix=.deb)
     curl -fL --retry 5 --retry-all-errors \
-      https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
+      "https://developer.download.nvidia.com/compute/cuda/repos/$ubuntu_repo/x86_64/cuda-keyring_1.1-1_all.deb" \
       -o "$keyring"
     "${SUDO[@]}" dpkg -i "$keyring"
     rm -f -- "$keyring"

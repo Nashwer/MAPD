@@ -10,10 +10,11 @@ cd ~/workspace/MAPD-repro && bash mapd.sh bootstrap
 ```
 
 No persistent `/home` directory is assumed. The minimum base-image contract is
-Ubuntu 24.04 x86_64, a working NVIDIA driver/GPU, Bash, `apt`, root access (or
-`sudo`), and a checked-out copy of this repository. The bootstrap verifies that
-contract and then obtains every other system package, Python package, source
-checkout, and model required by the current repository revision. Network access
+Ubuntu 22.04 or 24.04 x86_64, a working NVIDIA driver/GPU, Bash, `apt`, and a
+checked-out copy of this repository. Root or passwordless `sudo` is required
+only when a system build prerequisite is missing. The bootstrap verifies that
+contract and then obtains every other Python package, source checkout, and model
+required by the current repository revision. Network access
 to Ubuntu/NVIDIA package repositories, GitHub, Python package indexes, and the
 configured Hugging Face endpoint is required for an empty machine.
 
@@ -38,8 +39,8 @@ For a dependency-only rebuild without downloading/loading the model:
 bash mapd.sh bootstrap --skip-model --skip-verify
 ```
 
-The maintained bootstrap contract currently includes Python 3.12 headers,
-Ninja, the CUDA 13.0 compiler, cuRAND headers, veRL FSDP + vLLM, NumPy 2.3.5,
+The maintained bootstrap contract currently includes Ninja, CMake, a compatible
+CUDA compiler and cuRAND headers, veRL FSDP + vLLM, NumPy 2.3.5,
 PyArrow, pytest, MAPD, and Qwen3-1.7B. Pinned stack inputs live in
 `scripts/bootstrap_versions.env`; MAPD-side Python additions live in
 `requirements/server-bootstrap.txt`. Future modules must update these files
@@ -88,10 +89,14 @@ cd ~/workspace/MAPD-repro && bash mapd.sh setup
 `~/workspace/verl/.venv`. Only set `VERL_VENV` when the environment is stored
 elsewhere.
 
-The GPU smoke commands require the following Ubuntu packages in addition to
-the veRL environment: `python3.12-dev`, `ninja-build`,
-`cuda-compiler-13-0`, and `libcurand-dev-13-0`. The launcher automatically
-uses `/usr/local/cuda-13.0` when it is installed there.
+The GPU smoke commands require a C/C++ build toolchain, Ninja, CMake, a CUDA
+compiler and cuRAND headers in addition to the veRL environment. The launcher
+discovers `nvcc` from `PATH`/`CUDA_HOME`; `MAPD_CUDA_SERIES` can select a
+host-provided compatible toolkit without editing tracked files.
+
+For the no-sudo BUPT shared-host profile, including storage layout, configurable
+retriever ports and GPU collision guards, see
+[`shared-server-deployment.md`](shared-server-deployment.md).
 
 ## Local model smoke test
 

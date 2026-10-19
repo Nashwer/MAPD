@@ -16,4 +16,4 @@ if ! "$PYTHON" -c "import pytest" >/dev/null 2>&1; then
   "$PYTHON" -m pip install "pytest>=8,<9"
 fi
 cd "$PROJECT_ROOT"
-"$PYTHON" -m mapd doctor --config configs/local_smoke.yaml --require-gpu
+bash "$PROJECT_ROOT/mapd.sh" doctor

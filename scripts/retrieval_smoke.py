@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from pathlib import Path
 
@@ -16,7 +17,10 @@ from mapd.reward.exact_match import normalize_answer
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--url", default="http://127.0.0.1:8000/retrieve")
+    parser.add_argument(
+        "--url",
+        default=os.environ.get("MAPD_RETRIEVER_URL", "http://127.0.0.1:8000/retrieve"),
+    )
     parser.add_argument("--qa", type=Path, required=True)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--top-k", type=int, default=3)

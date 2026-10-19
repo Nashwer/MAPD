@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 from mapd.retrieval.http_service import serve_http_retriever
@@ -17,8 +18,10 @@ def main() -> int:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--nprobe", type=int, default=64)
     parser.add_argument("--threads", type=int)
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--host", default=os.environ.get("MAPD_RETRIEVER_HOST", "127.0.0.1"))
+    parser.add_argument(
+        "--port", type=int, default=int(os.environ.get("MAPD_RETRIEVER_PORT", "8000"))
+    )
     parser.add_argument("--top-k", type=int, default=3)
     parser.add_argument("--query-timeout", type=float, default=20.0)
     args = parser.parse_args()

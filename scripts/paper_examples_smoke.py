@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from mapd.data.schema import QASample
@@ -68,7 +69,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir", type=Path, default=Path("artifacts/paper_examples_action_v4")
     )
-    parser.add_argument("--retriever-url", default="http://127.0.0.1:8000/retrieve")
+    parser.add_argument(
+        "--retriever-url",
+        default=os.environ.get("MAPD_RETRIEVER_URL", "http://127.0.0.1:8000/retrieve"),
+    )
     parser.add_argument("--rollouts-per-example", type=int, default=4)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int, default=3)

@@ -9,9 +9,16 @@ if [[ -f "$PROJECT_ROOT/.env" ]]; then
   source "$PROJECT_ROOT/.env"
   set +a
 fi
-export VERL_VENV=${VERL_VENV:-"$(dirname "$PROJECT_ROOT")/verl/.venv"}
+export MAPD_STORAGE_ROOT=${MAPD_STORAGE_ROOT:-"$HOME"}
+export MAPD_CACHE_ROOT=${MAPD_CACHE_ROOT:-"$MAPD_STORAGE_ROOT/cache"}
+export MAPD_MODEL_ROOT=${MAPD_MODEL_ROOT:-"$MAPD_STORAGE_ROOT/models"}
+export VERL_ROOT=${VERL_ROOT:-"$(dirname "$PROJECT_ROOT")/verl"}
+export VERL_VENV=${VERL_VENV:-"$VERL_ROOT/.venv"}
 export HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
-export HF_HOME=${HF_HOME:-"$HOME/cache/huggingface"}
+export HF_HOME=${HF_HOME:-"$MAPD_CACHE_ROOT/huggingface"}
+export UV_CACHE_DIR=${UV_CACHE_DIR:-"$MAPD_CACHE_ROOT/uv"}
+export PIP_CACHE_DIR=${PIP_CACHE_DIR:-"$MAPD_CACHE_ROOT/pip"}
+export TMPDIR=${TMPDIR:-"$MAPD_STORAGE_ROOT/tmp"}
 export HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT:-1200}
 export HF_HUB_ETAG_TIMEOUT=${HF_HUB_ETAG_TIMEOUT:-60}
 PROTOCOL_SYNTHESIS_REVISION=10
@@ -20,16 +27,69 @@ if [[ -f "$PROJECT_ROOT/scripts/bootstrap_versions.env" ]]; then
   source "$PROJECT_ROOT/scripts/bootstrap_versions.env"
   export MAPD_QA_REVISION MAPD_WIKI18_REVISION MAPD_WIKI18_E5_REVISION
 fi
+export MAPD_RETRIEVER_HOST=${MAPD_RETRIEVER_HOST:-127.0.0.1}
+export MAPD_RETRIEVER_PORT=${MAPD_RETRIEVER_PORT:-8000}
+[[ "$MAPD_RETRIEVER_PORT" =~ ^[0-9]+$ ]] &&
+  (( MAPD_RETRIEVER_PORT >= 1 && MAPD_RETRIEVER_PORT <= 65535 )) || {
+  echo "MAPD_RETRIEVER_PORT must be an integer between 1 and 65535" >&2
+  exit 2
+}
+export MAPD_RETRIEVER_URL=${MAPD_RETRIEVER_URL:-"http://$MAPD_RETRIEVER_HOST:$MAPD_RETRIEVER_PORT/retrieve"}
+export MAPD_RETRIEVER_HEALTH_URL=${MAPD_RETRIEVER_HEALTH_URL:-"${MAPD_RETRIEVER_URL%/retrieve}/health"}
+
+if [[ -n "${MAPD_GPU_DEVICES:-}" ]]; then
+  [[ "$MAPD_GPU_DEVICES" =~ ^[0-9]+(,[0-9]+)*$ ]] || {
+    echo "MAPD_GPU_DEVICES must be a comma-separated list of physical GPU indices" >&2
+    exit 2
+  }
+  export CUDA_VISIBLE_DEVICES=$MAPD_GPU_DEVICES
+fi
 PROTOCOL_RUN_TAG=${MAPD_PROTOCOL_RUN_TAG:-r${PROTOCOL_SYNTHESIS_REVISION}}
 [[ "$PROTOCOL_RUN_TAG" =~ ^[A-Za-z0-9._-]+$ ]] || {
   echo "MAPD_PROTOCOL_RUN_TAG may contain only letters, digits, dot, underscore, and hyphen" >&2
   exit 2
 }
 
-if [[ -x /usr/local/cuda-13.0/bin/nvcc ]]; then
-  export CUDA_HOME=${CUDA_HOME:-/usr/local/cuda-13.0}
+if [[ -z "${CUDA_HOME:-}" ]] && command -v nvcc >/dev/null 2>&1; then
+  CUDA_NVCC=$(readlink -f "$(command -v nvcc)")
+  export CUDA_HOME=$(dirname "$(dirname "$CUDA_NVCC")")
+elif [[ -z "${CUDA_HOME:-}" && -x /usr/local/cuda/bin/nvcc ]]; then
+  export CUDA_HOME=/usr/local/cuda
+elif [[ -z "${CUDA_HOME:-}" && -x "/usr/local/cuda-${MAPD_CUDA_SERIES:-13.0}/bin/nvcc" ]]; then
+  export CUDA_HOME="/usr/local/cuda-${MAPD_CUDA_SERIES:-13.0}"
+fi
+if [[ -n "${CUDA_HOME:-}" ]]; then
   export PATH="$CUDA_HOME/bin:$PATH"
 fi
+
+retriever_is_healthy() {
+  curl -fsS --connect-timeout 1 --max-time 3 "$MAPD_RETRIEVER_HEALTH_URL" >/dev/null
+}
+
+acquire_gpu_locks() {
+  if [[ "${MAPD_SHARED_SERVER:-0}" == 1 && -z "${MAPD_GPU_DEVICES:-}" ]]; then
+    echo "MAPD_GPU_DEVICES must be set before a GPU job on a shared server" >&2
+    echo "Run 'bash mapd.sh server-preflight' after selecting currently idle physical GPU indices." >&2
+    exit 1
+  fi
+  [[ -n "${MAPD_GPU_DEVICES:-}" ]] || return 0
+  command -v flock >/dev/null 2>&1 || {
+    echo "flock is required for shared-server GPU locking" >&2
+    exit 1
+  }
+  mkdir -p "$PROJECT_ROOT/.run"
+  GPU_LOCK_FDS=()
+  IFS=, read -r -a gpu_indices <<< "$MAPD_GPU_DEVICES"
+  for gpu_index in "${gpu_indices[@]}"; do
+    exec {gpu_lock_fd}>"$PROJECT_ROOT/.run/gpu-${gpu_index}.lock"
+    if ! flock -n "$gpu_lock_fd"; then
+      echo "GPU $gpu_index is already reserved by another MAPD job in this checkout" >&2
+      exit 1
+    fi
+    GPU_LOCK_FDS+=("$gpu_lock_fd")
+  done
+  bash "$PROJECT_ROOT/scripts/shared_server_preflight.sh"
+}
 
 usage() {
   cat <<'EOF'
@@ -37,6 +97,7 @@ Usage: bash mapd.sh COMMAND
 
 Commands:
   bootstrap  Rebuild or repair the complete ephemeral GPU-server environment
+  server-preflight  Inspect shared-server storage, ports, CUDA, and selected GPUs
   setup      Install into the sibling veRL environment and run full verification
   verify     Run tests and the offline end-to-end smoke flow
   data-setup Download and prepare the de-duplicated 25,600-example training set
@@ -83,6 +144,9 @@ EOF
 case ${1:-} in
   bootstrap)
     bash "$PROJECT_ROOT/scripts/bootstrap_server.sh" "${@:2}"
+    ;;
+  server-preflight)
+    bash "$PROJECT_ROOT/scripts/shared_server_preflight.sh"
     ;;
   setup)
     bash "$PROJECT_ROOT/scripts/install_linux.sh"
@@ -188,7 +252,11 @@ case ${1:-} in
     ;;
   retrieval-start)
     RETRIEVER_BACKEND=${MAPD_RETRIEVER_BACKEND:-sqlite-fts5}
-    RETRIEVER_ARGS=(--backend "$RETRIEVER_BACKEND")
+    RETRIEVER_ARGS=(
+      --backend "$RETRIEVER_BACKEND"
+      --host "$MAPD_RETRIEVER_HOST"
+      --port "$MAPD_RETRIEVER_PORT"
+    )
     case "$RETRIEVER_BACKEND" in
       sqlite-fts5)
         RETRIEVER_ARGS+=(
@@ -219,7 +287,7 @@ case ${1:-} in
     RETRIEVER_PID_FILE="$PROJECT_ROOT/.run/retriever.pid"
     for ((attempt = 1; attempt <= RETRIEVER_HEALTH_WAIT; attempt++)); do
       if HEALTH_RESPONSE=$(curl -fsS --connect-timeout 1 --max-time 2 \
-        http://127.0.0.1:8000/health 2>/dev/null); then
+        "$MAPD_RETRIEVER_HEALTH_URL" 2>/dev/null); then
         printf '%s\n' "$HEALTH_RESPONSE"
         exit 0
       fi
@@ -253,13 +321,16 @@ case ${1:-} in
     cd "$PROJECT_ROOT"
     TRAIN_DATA=${MAPD_TRAIN_DATA:-data/training/mapd_train_25600.jsonl}
     "$VERL_VENV/bin/python" scripts/retrieval_smoke.py \
+      --url "$MAPD_RETRIEVER_URL" \
       --qa "$TRAIN_DATA" --limit "${2:-20}" --top-k 3
     ;;
   grpo-smoke)
     cd "$PROJECT_ROOT"
-    MODEL_PATH=${2:-${MAPD_MODEL_PATH:-"$HOME/models/Qwen3-1.7B"}}
+    acquire_gpu_locks
+    MODEL_PATH=${2:-${MAPD_MODEL_PATH:-"$MAPD_MODEL_ROOT/Qwen3-1.7B"}}
     "$VERL_VENV/bin/python" scripts/real_grpo_rollout.py \
-      --model "$MODEL_PATH" --qa data/training/mapd_train_25600.jsonl
+      --model "$MODEL_PATH" --qa data/training/mapd_train_25600.jsonl \
+      --retriever-url "$MAPD_RETRIEVER_URL"
     "$VERL_VENV/bin/python" scripts/real_grpo_optimize.py --model "$MODEL_PATH"
     ;;
   protocol-smoke)
@@ -347,9 +418,10 @@ case ${1:-} in
     ;;
   privileged-rollout)
     cd "$PROJECT_ROOT"
+    acquire_gpu_locks
     OFFSET=${2:-0}
     COUNT=${3:-20}
-    MODEL_PATH=${4:-${MAPD_MODEL_PATH:-"$HOME/models/Qwen3-1.7B"}}
+    MODEL_PATH=${4:-${MAPD_MODEL_PATH:-"$MAPD_MODEL_ROOT/Qwen3-1.7B"}}
     [[ "$OFFSET" =~ ^[0-9]+$ && "$COUNT" =~ ^[1-9][0-9]*$ ]] || {
       echo "OFFSET must be nonnegative and COUNT must be positive" >&2
       exit 2
@@ -359,7 +431,7 @@ case ${1:-} in
       echo "protocol shard not found: $SHARD_DIR/artifacts.jsonl" >&2
       exit 1
     }
-    if ! curl -fsS --connect-timeout 1 --max-time 3 http://127.0.0.1:8000/health >/dev/null; then
+    if ! retriever_is_healthy; then
       echo "retriever is not healthy; run: bash mapd.sh retrieval-start" >&2
       exit 1
     fi
@@ -368,12 +440,12 @@ case ${1:-} in
       --model "$MODEL_PATH" \
       --artifacts "$SHARD_DIR/artifacts.jsonl" \
       --output-dir "$OUTPUT_DIR" \
-      --retriever-url "${MAPD_RETRIEVER_URL:-http://127.0.0.1:8000/retrieve}"
+      --retriever-url "$MAPD_RETRIEVER_URL"
     ;;
   privileged-start)
     OFFSET=${2:-0}
     COUNT=${3:-20}
-    MODEL_PATH=${4:-${MAPD_MODEL_PATH:-"$HOME/models/Qwen3-1.7B"}}
+    MODEL_PATH=${4:-${MAPD_MODEL_PATH:-"$MAPD_MODEL_ROOT/Qwen3-1.7B"}}
     bash "$PROJECT_ROOT/scripts/jobctl.sh" start privileged-rollout \
       bash "$PROJECT_ROOT/mapd.sh" privileged-rollout "$OFFSET" "$COUNT" "$MODEL_PATH"
     ;;
@@ -401,9 +473,10 @@ case ${1:-} in
     ;;
   protocol-train-smoke)
     cd "$PROJECT_ROOT"
+    acquire_gpu_locks
     OFFSET=${2:-0}
     COUNT=${3:-20}
-    MODEL_PATH=${4:-${MAPD_MODEL_PATH:-"$HOME/models/Qwen3-1.7B"}}
+    MODEL_PATH=${4:-${MAPD_MODEL_PATH:-"$MAPD_MODEL_ROOT/Qwen3-1.7B"}}
     [[ "$OFFSET" =~ ^[0-9]+$ && "$COUNT" =~ ^[1-9][0-9]*$ ]] || {
       echo "OFFSET must be nonnegative and COUNT must be positive" >&2
       exit 2
@@ -413,7 +486,7 @@ case ${1:-} in
       echo "protocol shard not found: $SHARD_DIR/artifacts.jsonl" >&2
       exit 1
     }
-    if ! curl -fsS --connect-timeout 1 --max-time 3 http://127.0.0.1:8000/health >/dev/null; then
+    if ! retriever_is_healthy; then
       echo "retriever is not healthy; run: bash mapd.sh retrieval-start" >&2
       exit 1
     fi
@@ -422,7 +495,7 @@ case ${1:-} in
       --model "$MODEL_PATH" \
       --artifacts "$SHARD_DIR/artifacts.jsonl" \
       --output-dir "$OUTPUT_DIR" \
-      --retriever-url "${MAPD_RETRIEVER_URL:-http://127.0.0.1:8000/retrieve}"
+      --retriever-url "$MAPD_RETRIEVER_URL"
     "$VERL_VENV/bin/python" scripts/protocol_train_smoke_optimize.py \
       --model "$MODEL_PATH" \
       --artifacts "$SHARD_DIR/artifacts.jsonl" \
@@ -432,7 +505,7 @@ case ${1:-} in
   protocol-train-start)
     OFFSET=${2:-0}
     COUNT=${3:-20}
-    MODEL_PATH=${4:-${MAPD_MODEL_PATH:-"$HOME/models/Qwen3-1.7B"}}
+    MODEL_PATH=${4:-${MAPD_MODEL_PATH:-"$MAPD_MODEL_ROOT/Qwen3-1.7B"}}
     bash "$PROJECT_ROOT/scripts/jobctl.sh" start protocol-train-smoke \
       bash "$PROJECT_ROOT/mapd.sh" protocol-train-smoke "$OFFSET" "$COUNT" "$MODEL_PATH"
     ;;
@@ -464,6 +537,7 @@ case ${1:-} in
     ;;
   student-eval)
     cd "$PROJECT_ROOT"
+    acquire_gpu_locks
     VARIANT=${2:-baseline}
     EVAL_COUNT=${3:-200}
     MODEL_PATH=${4:-}
@@ -479,7 +553,7 @@ case ${1:-} in
     if [[ -z "$MODEL_PATH" ]]; then
       case "$VARIANT" in
         baseline)
-          MODEL_PATH=${MAPD_MODEL_PATH:-"$HOME/models/Qwen3-1.7B"}
+          MODEL_PATH=${MAPD_MODEL_PATH:-"$MAPD_MODEL_ROOT/Qwen3-1.7B"}
           ;;
         trained)
           TRAIN_OFFSET=${MAPD_EVAL_TRAIN_OFFSET:-0}
@@ -501,7 +575,7 @@ case ${1:-} in
     TRAIN_DATA=${MAPD_FULL_TRAIN_DATA:-$PROJECT_ROOT/data/training/mapd_train_25600.jsonl}
     [[ -s "$EVAL_DATA" ]] || { echo "held-out evaluation data not found: $EVAL_DATA" >&2; exit 1; }
     [[ -s "$TRAIN_DATA" ]] || { echo "training data not found: $TRAIN_DATA" >&2; exit 1; }
-    if ! curl -fsS --connect-timeout 1 --max-time 3 http://127.0.0.1:8000/health >/dev/null; then
+    if ! retriever_is_healthy; then
       echo "retriever is not healthy; run: bash mapd.sh retrieval-start" >&2
       exit 1
     fi
@@ -527,7 +601,7 @@ case ${1:-} in
       --qa "$EVAL_DATA" \
       --training-data "$TRAIN_DATA" \
       --output-dir "$OUTPUT_DIR" \
-      --retriever-url "${MAPD_RETRIEVER_URL:-http://127.0.0.1:8000/retrieve}" \
+      --retriever-url "$MAPD_RETRIEVER_URL" \
       --retriever-backend "$RETRIEVER_BACKEND" \
       --retriever-index "$RETRIEVER_INDEX" \
       "${RETRIEVER_IDENTITY_ARGS[@]}" \
@@ -568,17 +642,18 @@ case ${1:-} in
     ;;
   paper-examples)
     cd "$PROJECT_ROOT"
-    MODEL_PATH=${2:-${MAPD_MODEL_PATH:-"$HOME/models/Qwen3-1.7B"}}
-    if ! curl -fsS --connect-timeout 1 --max-time 3 http://127.0.0.1:8000/health >/dev/null; then
+    acquire_gpu_locks
+    MODEL_PATH=${2:-${MAPD_MODEL_PATH:-"$MAPD_MODEL_ROOT/Qwen3-1.7B"}}
+    if ! retriever_is_healthy; then
       echo "retriever is not healthy; run: bash mapd.sh retrieval-start" >&2
       exit 1
     fi
     "$VERL_VENV/bin/python" scripts/paper_examples_smoke.py \
       --model "$MODEL_PATH" \
-      --retriever-url "${MAPD_RETRIEVER_URL:-http://127.0.0.1:8000/retrieve}"
+      --retriever-url "$MAPD_RETRIEVER_URL"
     ;;
   paper-examples-start)
-    MODEL_PATH=${2:-${MAPD_MODEL_PATH:-"$HOME/models/Qwen3-1.7B"}}
+    MODEL_PATH=${2:-${MAPD_MODEL_PATH:-"$MAPD_MODEL_ROOT/Qwen3-1.7B"}}
     bash "$PROJECT_ROOT/scripts/jobctl.sh" start paper-examples \
       bash "$PROJECT_ROOT/mapd.sh" paper-examples "$MODEL_PATH"
     ;;
@@ -593,15 +668,18 @@ case ${1:-} in
     ;;
   model-smoke)
     cd "$PROJECT_ROOT"
+    acquire_gpu_locks
     "$VERL_VENV/bin/python" "$PROJECT_ROOT/scripts/model_smoke.py" "${2:-}"
     ;;
   agent-smoke)
     cd "$PROJECT_ROOT"
+    acquire_gpu_locks
     "$VERL_VENV/bin/python" "$PROJECT_ROOT/scripts/agent_smoke.py" "${2:-}"
     ;;
   train-smoke)
     cd "$PROJECT_ROOT"
-    MODEL_PATH=${2:-${MAPD_MODEL_PATH:-"$HOME/models/Qwen3-1.7B"}}
+    acquire_gpu_locks
+    MODEL_PATH=${2:-${MAPD_MODEL_PATH:-"$MAPD_MODEL_ROOT/Qwen3-1.7B"}}
     if [[ ! -s "$PROJECT_ROOT/artifacts/smoke/artifacts.jsonl" ]]; then
       bash "$PROJECT_ROOT/scripts/run_smoke.sh"
     fi
@@ -631,6 +709,7 @@ case ${1:-} in
     ;;
   doctor)
     cd "$PROJECT_ROOT"
+    acquire_gpu_locks
     "$VERL_VENV/bin/python" -m mapd doctor --config configs/local_smoke.yaml --require-gpu
     ;;
   help|-h|--help|"")

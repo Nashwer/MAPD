@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 from pathlib import Path
 
@@ -19,7 +20,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--qa", type=Path, required=True)
-    parser.add_argument("--retriever-url", default="http://127.0.0.1:8000/retrieve")
+    parser.add_argument(
+        "--retriever-url",
+        default=os.environ.get("MAPD_RETRIEVER_URL", "http://127.0.0.1:8000/retrieve"),
+    )
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/real_grpo_smoke"))
     parser.add_argument("--group-size", type=int, default=8)
     parser.add_argument("--candidate-limit", type=int, default=12)
