@@ -37,7 +37,8 @@ bash mapd.sh bootstrap --skip-model --skip-verify
 ```
 
 Bootstrap accepts Ubuntu 22.04 and 24.04, discovers an existing CUDA toolkit,
-and uses only user-writable cache/model directories. If a required system build
+installs a user-owned CPython 3.12 through `uv` for veRL v0.9.1, and uses only
+user-writable cache/model directories. The system Python may remain 3.10. If a required system build
 tool is absent and passwordless sudo is unavailable, it stops with the exact
 administrator package request rather than attempting an interactive sudo.
 

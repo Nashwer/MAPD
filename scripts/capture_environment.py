@@ -50,6 +50,7 @@ def main() -> int:
             "schema": os.environ.get("MAPD_BOOTSTRAP_SCHEMA"),
             "verl_ref": os.environ.get("MAPD_VERL_REF"),
             "model_id": os.environ.get("MAPD_MODEL_ID"),
+            "python": os.environ.get("MAPD_PYTHON_VERSION"),
             "numpy": os.environ.get("MAPD_NUMPY_VERSION"),
             "cuda_series": os.environ.get("MAPD_CUDA_SERIES"),
             "qa_revision": os.environ.get("MAPD_QA_REVISION"),

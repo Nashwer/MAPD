@@ -67,7 +67,7 @@ export VERL_ROOT VERL_VENV CUDA_HOME
 export PATH="$CUDA_HOME/bin:$HOME/.local/bin:$PATH"
 export UV_CACHE_DIR HF_HOME HF_ENDPOINT UV_DEFAULT_INDEX UV_HTTP_TIMEOUT
 export UV_CONCURRENT_DOWNLOADS PIP_INDEX_URL PIP_CACHE_DIR TMPDIR
-export MAPD_BOOTSTRAP_SCHEMA MAPD_VERL_REF MAPD_MODEL_ID MAPD_NUMPY_VERSION
+export MAPD_BOOTSTRAP_SCHEMA MAPD_VERL_REF MAPD_MODEL_ID MAPD_PYTHON_VERSION MAPD_NUMPY_VERSION
 export MAPD_CUDA_SERIES MAPD_QA_REVISION MAPD_WIKI18_REVISION MAPD_WIKI18_E5_REVISION
 
 section() {
@@ -200,6 +200,8 @@ install_uv_if_needed() {
 
 have_python_stack() {
   [[ -x "$VERL_VENV/bin/python" ]] &&
+    "$VERL_VENV/bin/python" -c \
+      'import sys; raise SystemExit(sys.version_info < (3, 12))' >/dev/null 2>&1 &&
     "$VERL_VENV/bin/python" -c "import torch, verl, vllm" >/dev/null 2>&1
 }
 
@@ -228,10 +230,13 @@ install_python_stack() {
   if have_python_stack; then
     echo "Reusing working environment: $VERL_VENV"
   else
-    echo "Materializing veRL FSDP + vLLM environment..."
+    echo "Installing managed CPython $MAPD_PYTHON_VERSION..."
+    uv python install "$MAPD_PYTHON_VERSION"
+    echo "Materializing veRL FSDP + vLLM environment with CPython $MAPD_PYTHON_VERSION..."
     (
       cd "$VERL_ROOT"
-      uv sync --frozen --all-packages --extra fsdp --extra vllm \
+      uv sync --python "$MAPD_PYTHON_VERSION" \
+        --frozen --all-packages --extra fsdp --extra vllm \
         --no-install-package flash-attn
     )
   fi
