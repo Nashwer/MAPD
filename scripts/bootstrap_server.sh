@@ -352,7 +352,28 @@ install_python_stack() {
     "numpy==$MAPD_NUMPY_VERSION"
 
   have_python_stack || {
-    echo "ERROR: the pinned torch/veRL/vLLM stack cannot initialize CUDA $MAPD_CUDA_SERIES." >&2
+    echo "ERROR: the pinned runtime does not pass its dependency and CUDA $MAPD_CUDA_SERIES checks." >&2
+    echo "Dependency diagnostics:" >&2
+    "$VERL_VENV/bin/python" -m pip check >&2 || true
+    echo "CUDA diagnostics:" >&2
+    "$VERL_VENV/bin/python" - <<'PY' >&2 || true
+import importlib.metadata
+
+try:
+    import torch
+except Exception as error:
+    print(f"torch import failed: {error!r}")
+else:
+    print(f"torch: {torch.__version__}")
+    print(f"torch CUDA: {torch.version.cuda}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+
+for package in ("verl", "vllm", "ray", "datasets", "protobuf"):
+    try:
+        print(f"{package}: {importlib.metadata.version(package)}")
+    except importlib.metadata.PackageNotFoundError:
+        print(f"{package}: MISSING")
+PY
     exit 22
   }
 
