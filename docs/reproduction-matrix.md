@@ -17,7 +17,7 @@ that has actually run on the RTX 4090 D test instance. See
 | Repair | GT diagnostic, expression/search, <=2 rounds | Implemented | GT is redacted from persisted diagnostics |
 | Protocolizer | Succeeded and Evidence variants | Implemented | Invalid raw JSON is retained for audit |
 | Quality gate | schema, EM, extractive facts, leak detection | Implemented | Leak check is deterministic answer/alias detection |
-| Agentic rollout | <=4 retrieval interaction turns | Environment and vLLM policy adapter implemented; one real two-turn fixture-search trajectory GPU verified | veRL v0.9.1 custom training loop remains GPU-backend work |
+| Agentic rollout | <=4 retrieval interaction turns | Environment and vLLM policy adapter implemented; one real two-turn fixture-search trajectory GPU verified | Selected veRL runtime profile custom training loop remains GPU-backend work |
 | GRPO | group 8, terminal EM reward | Reference objective, exact replay, and real-data mixed-reward rollout/optimizer acceptance command implemented | Command still needs GPU verification; distributed veRL remains pending |
 | OPSD | same current policy, protocol PI, reverse KL | Exact-token dual-context replay, stop-gradient PI branch, and full-vocabulary PyTorch KL GPU verified | veRL worker integration pending |
 | Fallback | failed gate -> correct self-rollout PI | Implemented selector | Availability is decided after online rollouts |

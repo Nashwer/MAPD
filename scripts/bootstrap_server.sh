@@ -69,6 +69,9 @@ export UV_CACHE_DIR HF_HOME HF_ENDPOINT UV_DEFAULT_INDEX UV_HTTP_TIMEOUT
 export UV_CONCURRENT_DOWNLOADS PIP_INDEX_URL PIP_CACHE_DIR TMPDIR
 export MAPD_BOOTSTRAP_SCHEMA MAPD_VERL_REF MAPD_MODEL_ID MAPD_PYTHON_VERSION MAPD_NUMPY_VERSION
 export MAPD_CUDA_SERIES MAPD_QA_REVISION MAPD_WIKI18_REVISION MAPD_WIKI18_E5_REVISION
+export MAPD_RUNTIME_PROFILE MAPD_TORCH_VERSION MAPD_TORCHVISION_VERSION
+export MAPD_TORCHAUDIO_VERSION MAPD_VLLM_VERSION MAPD_TRANSFORMERS_VERSION MAPD_TORCH_INDEX_URL
+export CUDA_DEVICE_ORDER=${CUDA_DEVICE_ORDER:-PCI_BUS_ID}
 
 section() {
   echo
@@ -169,6 +172,21 @@ install_system_stack() {
 clone_verl_if_needed() {
   if [[ -d "$VERL_ROOT/.git" ]]; then
     echo "Reusing veRL checkout: $VERL_ROOT"
+    if [[ -n "$(git -C "$VERL_ROOT" status --porcelain --untracked-files=no)" ]]; then
+      echo "ERROR: $VERL_ROOT has tracked local changes; refusing to switch it to $VERL_REF." >&2
+      echo "Commit or stash those veRL changes, then rerun bootstrap." >&2
+      exit 20
+    fi
+    local current_ref requested_ref
+    current_ref=$(git -C "$VERL_ROOT" rev-parse HEAD)
+    git -C "$VERL_ROOT" fetch --depth 1 origin "$VERL_REF"
+    requested_ref=$(git -C "$VERL_ROOT" rev-parse FETCH_HEAD)
+    if [[ "$current_ref" != "$requested_ref" ]]; then
+      echo "Switching veRL from $current_ref to $VERL_REF ($requested_ref)..."
+      git -C "$VERL_ROOT" checkout --detach "$requested_ref"
+    else
+      echo "veRL revision already matches $VERL_REF ($current_ref)."
+    fi
     return
   fi
   if [[ -e "$VERL_ROOT" ]]; then
@@ -202,23 +220,80 @@ have_python_stack() {
   [[ -x "$VERL_VENV/bin/python" ]] &&
     "$VERL_VENV/bin/python" -c \
       'import sys; raise SystemExit(sys.version_info < (3, 12))' >/dev/null 2>&1 &&
-    "$VERL_VENV/bin/python" -c "import torch, verl, vllm" >/dev/null 2>&1
+    "$VERL_VENV/bin/python" - "$MAPD_TORCH_VERSION" "$MAPD_VLLM_VERSION" "$MAPD_CUDA_SERIES" <<'PY' >/dev/null 2>&1
+import importlib.metadata
+import sys
+
+import torch
+import verl  # noqa: F401
+import vllm  # noqa: F401
+
+expected_torch, expected_vllm, expected_cuda = sys.argv[1:]
+actual_torch = importlib.metadata.version("torch").split("+")[0]
+actual_vllm = importlib.metadata.version("vllm")
+if actual_torch != expected_torch or actual_vllm != expected_vllm:
+    raise SystemExit(1)
+if torch.version.cuda != expected_cuda or not torch.cuda.is_available():
+    raise SystemExit(1)
+PY
 }
 
 report_python_stack() {
   if [[ ! -e "$VERL_VENV" ]]; then
     echo "Virtual environment: MISSING ($VERL_VENV)"
-    echo "A clean environment will be created from veRL's uv.lock."
+    echo "A clean environment will be created for $MAPD_RUNTIME_PROFILE."
   elif [[ ! -x "$VERL_VENV/bin/python" ]]; then
     echo "Virtual environment: INCOMPLETE ($VERL_VENV)"
-    echo "The existing directory will be repaired from veRL's uv.lock."
+    echo "The existing directory will be repaired for $MAPD_RUNTIME_PROFILE."
   elif have_python_stack; then
     echo "Virtual environment: HEALTHY ($VERL_VENV)"
     echo "The persistent environment can be reused."
   else
     echo "Virtual environment: BROKEN ($VERL_VENV)"
-    echo "Missing or unusable Python packages will be repaired from veRL's uv.lock."
+    echo "The installed package/CUDA tuple does not match $MAPD_RUNTIME_PROFILE and will be rebuilt."
   fi
+}
+
+install_cu124_stack() {
+  if [[ "$MAPD_CUDA_SERIES" != 12.4 ]]; then
+    echo "ERROR: $MAPD_RUNTIME_PROFILE requires MAPD_CUDA_SERIES=12.4, found $MAPD_CUDA_SERIES." >&2
+    exit 22
+  fi
+
+  echo "Creating a clean CPython $MAPD_PYTHON_VERSION environment..."
+  uv python install "$MAPD_PYTHON_VERSION"
+  uv venv --clear --seed --python "$MAPD_PYTHON_VERSION" "$VERL_VENV"
+
+  # Install the CUDA runtime tuple as one ABI-compatible unit.  vLLM 0.8.5
+  # is built for torch 2.6/cu124; replacing only torch produces importable
+  # packages whose compiled extensions fail at runtime.
+  "$VERL_VENV/bin/python" -m pip install \
+    --disable-pip-version-check \
+    --index-url "$MAPD_TORCH_INDEX_URL" \
+    "torch==$MAPD_TORCH_VERSION" \
+    "torchvision==$MAPD_TORCHVISION_VERSION" \
+    "torchaudio==$MAPD_TORCHAUDIO_VERSION"
+  "$VERL_VENV/bin/python" -m pip install \
+    --disable-pip-version-check \
+    "vllm==$MAPD_VLLM_VERSION" \
+    "transformers==$MAPD_TRANSFORMERS_VERSION" \
+    "numpy==$MAPD_NUMPY_VERSION"
+  "$VERL_VENV/bin/python" -m pip install \
+    --disable-pip-version-check \
+    --no-build-isolation \
+    -e "$VERL_ROOT"
+}
+
+install_uv_lock_stack() {
+  echo "Installing managed CPython $MAPD_PYTHON_VERSION..."
+  uv python install "$MAPD_PYTHON_VERSION"
+  echo "Materializing veRL FSDP + vLLM environment with CPython $MAPD_PYTHON_VERSION..."
+  (
+    cd "$VERL_ROOT"
+    uv sync --python "$MAPD_PYTHON_VERSION" \
+      --frozen --all-packages --extra fsdp --extra vllm \
+      --no-install-package flash-attn
+  )
 }
 
 install_python_stack() {
@@ -230,15 +305,18 @@ install_python_stack() {
   if have_python_stack; then
     echo "Reusing working environment: $VERL_VENV"
   else
-    echo "Installing managed CPython $MAPD_PYTHON_VERSION..."
-    uv python install "$MAPD_PYTHON_VERSION"
-    echo "Materializing veRL FSDP + vLLM environment with CPython $MAPD_PYTHON_VERSION..."
-    (
-      cd "$VERL_ROOT"
-      uv sync --python "$MAPD_PYTHON_VERSION" \
-        --frozen --all-packages --extra fsdp --extra vllm \
-        --no-install-package flash-attn
-    )
+    case "$MAPD_RUNTIME_PROFILE" in
+      cu124-torch26-vllm085)
+        install_cu124_stack
+        ;;
+      verl-uv-lock)
+        install_uv_lock_stack
+        ;;
+      *)
+        echo "ERROR: unsupported MAPD_RUNTIME_PROFILE=$MAPD_RUNTIME_PROFILE" >&2
+        exit 22
+        ;;
+    esac
   fi
 
   if ! "$VERL_VENV/bin/python" -m pip --version >/dev/null 2>&1; then
@@ -260,9 +338,21 @@ install_python_stack() {
     "numpy==$MAPD_NUMPY_VERSION"
 
   have_python_stack || {
-    echo "ERROR: torch, veRL, or vLLM is not importable." >&2
+    echo "ERROR: the pinned torch/veRL/vLLM stack cannot initialize CUDA $MAPD_CUDA_SERIES." >&2
     exit 22
   }
+
+  "$VERL_VENV/bin/python" - <<'PY'
+import torch
+import vllm
+
+print(f"torch: {torch.__version__}")
+print(f"torch CUDA: {torch.version.cuda}")
+print(f"vLLM: {vllm.__version__}")
+print(f"CUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"visible GPUs: {torch.cuda.device_count()}")
+PY
 }
 
 install_mapd() {

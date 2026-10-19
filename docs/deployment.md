@@ -20,7 +20,7 @@ configured Hugging Face endpoint is required for an empty machine.
 
 The bootstrap is idempotent. It classifies the virtual environment as
 `MISSING`, `INCOMPLETE`, `BROKEN`, or `HEALTHY`. A missing or damaged
-`~/workspace/verl/.venv` is created/repaired from veRL's frozen lock file; a
+`~/workspace/verl/.venv` is created/repaired from the selected runtime profile; a
 healthy one is reused. The model under `~/models/Qwen3-1.7B` is handled the
 same way. It then installs MAPD, runs offline tests and a real agent trajectory,
 and writes an exact environment record to
@@ -40,7 +40,7 @@ bash mapd.sh bootstrap --skip-model --skip-verify
 ```
 
 The maintained bootstrap contract currently includes Ninja, CMake, a compatible
-CUDA compiler and cuRAND headers, veRL FSDP + vLLM, NumPy 2.3.5,
+CUDA compiler and cuRAND headers, veRL FSDP + vLLM, NumPy,
 PyArrow, pytest, MAPD, and Qwen3-1.7B. Pinned stack inputs live in
 `scripts/bootstrap_versions.env`; MAPD-side Python additions live in
 `requirements/server-bootstrap.txt`. Future modules must update these files
@@ -49,11 +49,16 @@ remains complete.
 
 ## Current verification baseline
 
-The component stack was verified on an NVIDIA GeForce RTX 4090 D (24 GB) with
+The earlier CUDA 13 component stack was verified on an NVIDIA GeForce RTX 4090 D (24 GB) with
 Python 3.12.3, PyTorch 2.11.0+cu130, vLLM 0.24.0, NumPy 2.3.5, and the CUDA
 13.0 compiler/toolkit. Both the standalone model generation and the real
 Qwen3-1.7B -> fixture BM25 -> Qwen3-1.7B agent trajectory passed. The latter
 ended with strict exact-match reward `1.0` and `AGENT SMOKE OK`.
+
+The BUPT shared-server profile is intentionally different because its 550
+driver exposes CUDA 12.4 compatibility. It pins veRL v0.5.0, PyTorch
+2.6.0/cu124, and vLLM 0.8.5.post1 as one ABI-compatible unit. The bootstrap
+rejects a virtual environment unless CUDA can actually initialize.
 
 The dependencies were discovered and verified on the current server before the
 bootstrap was consolidated. The consolidated script itself still needs its

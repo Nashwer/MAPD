@@ -36,11 +36,18 @@ bash mapd.sh server-preflight
 bash mapd.sh bootstrap --skip-model --skip-verify
 ```
 
-Bootstrap accepts Ubuntu 22.04 and 24.04, discovers an existing CUDA toolkit,
-installs a user-owned CPython 3.12 through `uv` for veRL v0.9.1, and uses only
-user-writable cache/model directories. The system Python may remain 3.10. If a required system build
+Bootstrap accepts Ubuntu 22.04 and 24.04, discovers the existing CUDA 12.4
+toolkit, and installs a user-owned CPython 3.12 environment containing the
+driver-compatible veRL v0.5.0, PyTorch 2.6.0/cu124, and vLLM 0.8.5.post1
+tuple. It uses only user-writable cache/model directories. The system Python
+may remain 3.10. If a required system build
 tool is absent and passwordless sudo is unavailable, it stops with the exact
 administrator package request rather than attempting an interactive sudo.
+
+Package imports alone do not constitute a successful bootstrap. The health
+check also requires `torch.version.cuda == "12.4"` and
+`torch.cuda.is_available() == True`; this prevents a CUDA 13 wheel from being
+silently reused on the host's 550-series driver.
 
 ## Retrieval service
 
