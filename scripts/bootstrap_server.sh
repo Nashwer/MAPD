@@ -4,6 +4,7 @@ set -Eeuo pipefail
 PROJECT_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 WORKSPACE_ROOT=$(dirname "$PROJECT_ROOT")
 VERSIONS_FILE="$PROJECT_ROOT/scripts/bootstrap_versions.env"
+CU124_CONSTRAINTS="$PROJECT_ROOT/requirements/runtime-cu124.constraints.txt"
 if [[ ! -f "$VERSIONS_FILE" ]]; then
   echo "ERROR: missing repository version file: $VERSIONS_FILE" >&2
   exit 3
@@ -217,10 +218,10 @@ install_uv_if_needed() {
 }
 
 have_python_stack() {
-  [[ -x "$VERL_VENV/bin/python" ]] &&
-    "$VERL_VENV/bin/python" -c \
-      'import sys; raise SystemExit(sys.version_info < (3, 12))' >/dev/null 2>&1 &&
-    "$VERL_VENV/bin/python" - "$MAPD_TORCH_VERSION" "$MAPD_VLLM_VERSION" "$MAPD_CUDA_SERIES" <<'PY' >/dev/null 2>&1
+  [[ -x "$VERL_VENV/bin/python" ]] || return 1
+  "$VERL_VENV/bin/python" -c \
+    'import sys; raise SystemExit(sys.version_info < (3, 12))' >/dev/null 2>&1 || return 1
+  "$VERL_VENV/bin/python" - "$MAPD_TORCH_VERSION" "$MAPD_VLLM_VERSION" "$MAPD_CUDA_SERIES" <<'PY' >/dev/null 2>&1 || return 1
 import importlib.metadata
 import sys
 
@@ -236,6 +237,7 @@ if actual_torch != expected_torch or actual_vllm != expected_vllm:
 if torch.version.cuda != expected_cuda or not torch.cuda.is_available():
     raise SystemExit(1)
 PY
+  "$VERL_VENV/bin/python" -m pip check >/dev/null 2>&1
 }
 
 report_python_stack() {
@@ -259,6 +261,10 @@ install_cu124_stack() {
     echo "ERROR: $MAPD_RUNTIME_PROFILE requires MAPD_CUDA_SERIES=12.4, found $MAPD_CUDA_SERIES." >&2
     exit 22
   fi
+  if [[ ! -f "$CU124_CONSTRAINTS" ]]; then
+    echo "ERROR: missing runtime constraints: $CU124_CONSTRAINTS" >&2
+    exit 22
+  fi
 
   echo "Creating a clean CPython $MAPD_PYTHON_VERSION environment..."
   uv python install "$MAPD_PYTHON_VERSION"
@@ -275,11 +281,13 @@ install_cu124_stack() {
     "torchaudio==$MAPD_TORCHAUDIO_VERSION"
   "$VERL_VENV/bin/python" -m pip install \
     --disable-pip-version-check \
+    --constraint "$CU124_CONSTRAINTS" \
     "vllm==$MAPD_VLLM_VERSION" \
     "transformers==$MAPD_TRANSFORMERS_VERSION" \
     "numpy==$MAPD_NUMPY_VERSION"
   "$VERL_VENV/bin/python" -m pip install \
     --disable-pip-version-check \
+    --constraint "$CU124_CONSTRAINTS" \
     --no-build-isolation \
     -e "$VERL_ROOT"
 }
@@ -297,6 +305,10 @@ install_uv_lock_stack() {
 }
 
 install_python_stack() {
+  local constraint_args=()
+  if [[ "$MAPD_RUNTIME_PROFILE" == cu124-torch26-vllm085 ]]; then
+    constraint_args=(--constraint "$CU124_CONSTRAINTS")
+  fi
   section "2/5 veRL Python environment"
   clone_verl_if_needed
   install_uv_if_needed
@@ -330,9 +342,11 @@ install_python_stack() {
 
   "$VERL_VENV/bin/python" -m pip install \
     --disable-pip-version-check \
+    "${constraint_args[@]}" \
     -r "$PROJECT_ROOT/requirements/server-bootstrap.txt"
   "$VERL_VENV/bin/python" -m pip install \
     --disable-pip-version-check \
+    "${constraint_args[@]}" \
     --force-reinstall \
     --no-deps \
     "numpy==$MAPD_NUMPY_VERSION"

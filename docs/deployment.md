@@ -43,7 +43,8 @@ The maintained bootstrap contract currently includes Ninja, CMake, a compatible
 CUDA compiler and cuRAND headers, veRL FSDP + vLLM, NumPy,
 PyArrow, pytest, MAPD, and Qwen3-1.7B. Pinned stack inputs live in
 `scripts/bootstrap_versions.env`; MAPD-side Python additions live in
-`requirements/server-bootstrap.txt`. Future modules must update these files
+`requirements/server-bootstrap.txt`, and legacy runtime transitive pins live in
+`requirements/runtime-cu124.constraints.txt`. Future modules must update these files
 and the bootstrap script in the same code change, so the one-command rebuild
 remains complete.
 

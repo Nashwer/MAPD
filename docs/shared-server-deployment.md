@@ -49,6 +49,11 @@ check also requires `torch.version.cuda == "12.4"` and
 `torch.cuda.is_available() == True`; this prevents a CUDA 13 wheel from being
 silently reused on the host's 550-series driver.
 
+The profile also constrains Ray, Datasets, and OpenTelemetry through
+`requirements/runtime-cu124.constraints.txt`. This is required because veRL
+v0.5.0 leaves these transitive dependencies open-ended, while vLLM 0.8.5
+requires the OpenTelemetry 1.26 family.
+
 ## Retrieval service
 
 Keep the full compressed E5 retriever on CPU so it remains available while GPU
