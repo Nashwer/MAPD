@@ -18,6 +18,13 @@ MAPD_STORAGE_ROOT=${MAPD_STORAGE_ROOT:-"$HOME"}
 MAPD_CACHE_ROOT=${MAPD_CACHE_ROOT:-"$MAPD_STORAGE_ROOT/cache"}
 MODEL_ROOT=${MAPD_MODEL_PATH:-"${MAPD_MODEL_ROOT:-$MAPD_STORAGE_ROOT/models}/${MAPD_MODEL_ID##*/}"}
 VERL_REF=${VERL_REF:-$MAPD_VERL_REF}
+# Keep explicit VERL_REF overrides possible without accidentally enforcing the
+# repository's default revision.  VERL_REVISION may be supplied alongside an
+# override when an exact commit is desired.
+VERL_REVISION=${VERL_REVISION:-}
+if [[ -z "$VERL_REVISION" && "$VERL_REF" == "$MAPD_VERL_REF" ]]; then
+  VERL_REVISION=$MAPD_VERL_REVISION
+fi
 UV_CACHE_DIR=${UV_CACHE_DIR:-"$MAPD_CACHE_ROOT/uv"}
 HF_HOME=${HF_HOME:-"$MAPD_CACHE_ROOT/huggingface"}
 PIP_CACHE_DIR=${PIP_CACHE_DIR:-"$MAPD_CACHE_ROOT/pip"}
@@ -68,7 +75,7 @@ export VERL_ROOT VERL_VENV CUDA_HOME
 export PATH="$CUDA_HOME/bin:$HOME/.local/bin:$PATH"
 export UV_CACHE_DIR HF_HOME HF_ENDPOINT UV_DEFAULT_INDEX UV_HTTP_TIMEOUT
 export UV_CONCURRENT_DOWNLOADS PIP_INDEX_URL PIP_CACHE_DIR TMPDIR
-export MAPD_BOOTSTRAP_SCHEMA MAPD_VERL_REF MAPD_MODEL_ID MAPD_PYTHON_VERSION MAPD_NUMPY_VERSION
+export MAPD_BOOTSTRAP_SCHEMA MAPD_VERL_REF MAPD_VERL_REVISION MAPD_MODEL_ID MAPD_PYTHON_VERSION MAPD_NUMPY_VERSION
 export MAPD_CUDA_SERIES MAPD_QA_REVISION MAPD_WIKI18_REVISION MAPD_WIKI18_E5_REVISION
 export MAPD_RUNTIME_PROFILE MAPD_TORCH_VERSION MAPD_TORCHVISION_VERSION
 export MAPD_TORCHAUDIO_VERSION MAPD_VLLM_VERSION MAPD_TRANSFORMERS_VERSION MAPD_TORCH_INDEX_URL
@@ -178,10 +185,39 @@ clone_verl_if_needed() {
       echo "Commit or stash those veRL changes, then rerun bootstrap." >&2
       exit 20
     fi
-    local current_ref requested_ref
+    local attempt current_ref fetch_succeeded=0 requested_ref
     current_ref=$(git -C "$VERL_ROOT" rev-parse HEAD)
-    git -C "$VERL_ROOT" fetch --depth 1 origin "$VERL_REF"
+
+    # A bootstrap rerun on a shared or firewalled server must not require
+    # GitHub when the exact pinned checkout is already present locally.
+    if [[ -n "$VERL_REVISION" && "$current_ref" == "$VERL_REVISION" ]]; then
+      echo "veRL revision already matches pinned $VERL_REF ($current_ref); skipping network fetch."
+      return
+    fi
+    if requested_ref=$(git -C "$VERL_ROOT" rev-parse --verify "$VERL_REF^{commit}" 2>/dev/null) &&
+       [[ "$current_ref" == "$requested_ref" ]] &&
+       { [[ -z "$VERL_REVISION" ]] || [[ "$requested_ref" == "$VERL_REVISION" ]]; }; then
+      echo "veRL revision already matches local $VERL_REF ($current_ref); skipping network fetch."
+      return
+    fi
+
+    echo "Local veRL revision $current_ref does not match $VERL_REF; fetching it from GitHub..."
+    for attempt in 1 2 3; do
+      if git -C "$VERL_ROOT" fetch --depth 1 origin "$VERL_REF"; then
+        fetch_succeeded=1
+        break
+      fi
+      echo "veRL fetch failed (attempt $attempt/3)." >&2
+    done
+    if (( fetch_succeeded == 0 )); then
+      echo "ERROR: unable to fetch veRL $VERL_REF after three attempts." >&2
+      exit 21
+    fi
     requested_ref=$(git -C "$VERL_ROOT" rev-parse FETCH_HEAD)
+    if [[ -n "$VERL_REVISION" && "$requested_ref" != "$VERL_REVISION" ]]; then
+      echo "ERROR: veRL $VERL_REF resolved to $requested_ref, expected $VERL_REVISION." >&2
+      exit 22
+    fi
     if [[ "$current_ref" != "$requested_ref" ]]; then
       echo "Switching veRL from $current_ref to $VERL_REF ($requested_ref)..."
       git -C "$VERL_ROOT" checkout --detach "$requested_ref"
@@ -200,6 +236,12 @@ clone_verl_if_needed() {
     echo "Cloning veRL $VERL_REF (attempt $attempt/3)..."
     if git clone --depth 1 --branch "$VERL_REF" \
       https://github.com/verl-project/verl.git "$VERL_ROOT"; then
+      local cloned_ref
+      cloned_ref=$(git -C "$VERL_ROOT" rev-parse HEAD)
+      if [[ -n "$VERL_REVISION" && "$cloned_ref" != "$VERL_REVISION" ]]; then
+        echo "ERROR: cloned veRL $VERL_REF at $cloned_ref, expected $VERL_REVISION." >&2
+        exit 22
+      fi
       return
     fi
   done
